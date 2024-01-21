@@ -234,8 +234,8 @@ void dispatcher(void)
    Name - sentinel
    Purpose - The purpose of the sentinel routine is two-fold.  One
              responsibility is to keep the system going when all other
-	     processes are blocked.  The other is to detect and report
-	     simple deadlock states.
+	          processes are blocked.  The other is to detect and report
+	          simple deadlock states.
    Parameters - none
    Returns - nothing
    Side Effects -  if system is in deadlock, print appropriate error

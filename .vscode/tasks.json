@@ -1,0 +1,15 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Test Program",
+            "command": "make",
+            "type": "shell",
+            "args": ["-B", "-f", "${workspaceFolder}/Makefile", "${fileBasenameNoExtension}"],
+            "presentation": {
+                "reveal": "always"
+            },
+            "group": "build"
+        }
+    ]
+}
