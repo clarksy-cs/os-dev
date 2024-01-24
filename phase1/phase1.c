@@ -20,7 +20,8 @@ static void check_deadlock();
 void add_ready_proc(proc_struct *next_ready_proc);
 proc_ptr get_ready_proc();
 proc_ptr pop_proc();
-void list_add_node(List current_proc, proc_ptr new_node);
+void list_add_node(List *current_proc, proc_ptr new_node);
+proc_ptr list_pop_node(List current_proc, proc_ptr rm_node);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -41,10 +42,6 @@ unsigned int new_pid = SENTINELPID;
 
 /* initiates dispatch */
 int starting = 1;
-
-/* ready list */
-proc_ptr ready_list[6];
-
 
 /* -------------------------- Functions ----------------------------------- */
 /* ------------------------------------------------------------------------
@@ -105,9 +102,7 @@ void startup() {
    }
 
    /* initialize current pointer to sentinel */
-   /* set current's next process pointer to following position in process table*/
    current = &proc_tbl[0];
-   current->next_proc_ptr = &proc_tbl[1];
 
    /* initiate dispatch in fork1 */
    starting = 0;
@@ -162,10 +157,16 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       console("fork1(): creating process %s\n", name);
 
    /* test if in kernel mode; halt if in user mode */
+   // TODO:
 
    /* return if stack size is too small */
    if (stacksize < USLOSS_MIN_STACK) {
-      console("fork1(): Stack size too small. Halting...\n");
+      return -2;
+   }
+
+   /* return if name is too long */
+   if (strlen(name) >= (MAXNAME - 1)) {
+      console("fork1(): Process name is too long. Halting...\n");
       halt(1);
    }
 
@@ -176,81 +177,94 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
          break;
       }
       if (i == MAXPROC - 1) {
-         console("fork1(): Exceeded max processes. Halting...\n");
-         halt(1);
+         /* no empty slots available */
+         return -1;
       }
    }
 
-   /* return if name is too long */
-   if (strlen(name) >= (MAXNAME - 1)) {
-      console("fork1(): Process name is too long. Halting...\n");
-      halt(1);
-   }
+   /* pointer for new process in process table*/
+   proc_ptr new_proc = &proc_tbl[proc_slot];
 
    /* fill-in entry in process table */
    strcpy(proc_tbl[proc_slot].name, name);
-   proc_tbl[proc_slot].start_func = f;
-   proc_tbl[proc_slot].stacksize = stacksize;
-   proc_tbl[proc_slot].stack = malloc(stacksize);
-   proc_tbl[proc_slot].pid = new_pid;
-   proc_tbl[proc_slot].priority = priority;
-   proc_tbl[proc_slot].status = STATUS_READY;
+   strcpy(new_proc->name, name);
+   new_proc->start_func = f;
+   new_proc->stacksize = stacksize;
+   new_proc->stack = malloc(stacksize);
+   new_proc->pid = new_pid;
+   new_proc->priority = priority;
+   new_proc->status = STATUS_READY;
 
    new_pid++;
 
    if ( arg == NULL )
-      proc_tbl[proc_slot].start_arg[0] = '\0';
+      new_proc->start_arg[0] = '\0';
    else if (strlen(arg) >= (MAXARG - 1)) {
       console("fork1(): Argument too long. Halting...\n");
       halt(1);
    } else {
-      strcpy(proc_tbl[proc_slot].start_arg, arg);
+      strcpy(new_proc->start_arg, arg);
    }
 
    if (current != NULL) {
-      list_add_node(current->children, &proc_tbl[proc_slot]);
-      proc_tbl[proc_slot].parent_proc_ptr = current;
+      list_add_node(&current->children, new_proc);
+      new_proc->parent_proc_ptr = current;
    }
 
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC) */
-   context_init(&(proc_tbl[proc_slot].state), psr_get(),
-                proc_tbl[proc_slot].stack, 
-                proc_tbl[proc_slot].stacksize, launch);
+   context_init(&(new_proc->state), psr_get(),
+                new_proc->stack, 
+                new_proc->stacksize, launch);
 
    /* for future phase(s) */
-   p1_fork(proc_tbl[proc_slot].pid);
+   p1_fork(new_proc->pid);
 
    /* add to ready list */
-   add_ready_proc(&proc_tbl[proc_slot]);
+   add_ready_proc(new_proc);
 
-   // TODO:
    if (!starting) {
       dispatcher();
    }
 
-
 }  /* fork1 */
 
-void list_add_node(List current_proc, proc_ptr new_node) {
+void list_add_node(List *current_proc, proc_ptr new_node) {
 
-   if (current_proc.p_head == NULL) {
+   if (current_proc->p_head == NULL) {
       /* list is empty */
-      current_proc.p_head = new_node;
-      current_proc.p_tail = new_node;
-   } else if (current_proc.p_head->next_proc_ptr == NULL) {
+      current_proc->p_head = new_node;
+      current_proc->p_tail = new_node;
+   } else if (current_proc->p_head->next_proc_ptr == NULL) {
       /* list has only 1 node -- add to end */
-      current_proc.p_head->next_proc_ptr = new_node;
-      new_node->prev_proc_ptr = current_proc.p_head;
-      current_proc.p_tail = new_node;
+      current_proc->p_head->next_proc_ptr = new_node;
+      new_node->prev_proc_ptr = current_proc->p_head;
+      current_proc->p_tail = new_node;
    } else {
       /* list has more than 1 node -- add to end */
-      current_proc.p_tail->next_proc_ptr = new_node;
-      new_node->prev_proc_ptr = current_proc.p_tail;
-      current_proc.p_tail = new_node;
+      current_proc->p_tail->next_proc_ptr = new_node;
+      new_node->prev_proc_ptr = current_proc->p_tail;
+      current_proc->p_tail = new_node;
    }
 
-   current_proc.count++;
+   current_proc->count++;
+}
+
+proc_ptr list_pop_node(List current_proc, proc_ptr rm_node) {
+
+   rm_node = current_proc.p_head;
+
+   if (current_proc.p_head == current_proc.p_tail) {
+      current_proc.p_head = NULL;
+      current_proc.p_tail = NULL;
+   } else {
+      current_proc.p_head = current_proc.p_head->next_proc_ptr;
+      current_proc.p_head->prev_proc_ptr = NULL;
+   }
+
+   current_proc.count--;
+
+   return rm_node;
 }
 
 /* ------------------------------------------------------------------------
@@ -295,6 +309,16 @@ void launch()
                   parent is removed from the ready list and blocked.
    ------------------------------------------------------------------------ */
 int join(int *code) {
+   // ******WORK IN PROGRESS *************
+   
+   if (current->children.count == 0) {
+      return -2;
+   }
+
+   if (current->children.count > 0) {
+      current->status = STATUS_JOIN_BLOCKED;
+      dispatcher();
+   }
 
 } /* join */
 
@@ -347,9 +371,9 @@ proc_ptr pop_proc(int priority) {
    return proc_to_pop;
 }
 
+/* adds entry to ready list */
 void add_ready_proc(proc_ptr new_ready_proc) {
-   // TODO:
-   // add entry to ready list
+
    int priority = (new_ready_proc->priority - 1);
 
    if (ready_procs[priority].p_head == NULL) {
@@ -384,21 +408,17 @@ void add_ready_proc(proc_ptr new_ready_proc) {
 void dispatcher(void) {
 
    proc_ptr next_process;
-
-   // HARD CODE -- CHANGE THIS
-   next_process->pid = (current->pid + 1);
-
    context *prev_context_ptr = &current->state;
+
+   /* find the next process to run */
+   next_process = get_ready_proc();
 
    p1_switch(current->pid, next_process->pid);
 
-   // find the next process to run
-   next_process = get_ready_proc();
-
-   // set current ptr to new process
+   /* set current ptr to new process */
    current = next_process;
 
-   // swap old process with new process
+   /* swap old process with new process */
    context_switch(prev_context_ptr, &current->state);
 
 } /* dispatcher */
