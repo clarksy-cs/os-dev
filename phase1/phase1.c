@@ -17,10 +17,10 @@ void dispatcher(void);
 void launch();
 static void enableInterrupts();
 static void check_deadlock();
-void add_to_ready_list(proc_struct *next_ready_proc);
-proc_ptr get_next_ready_proc();
+void add_ready_proc(proc_struct *next_ready_proc);
+proc_ptr get_ready_proc();
 proc_ptr pop_proc();
-
+void list_add_node(List current_proc, proc_ptr new_node);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -28,18 +28,19 @@ proc_ptr pop_proc();
 int debugflag = 1;
 
 /* the process table */
-proc_struct ProcTable[MAXPROC];
+proc_struct proc_tbl[MAXPROC];
 
 /* process lists */
+List ready_procs[6];
 
 /* current process ID */
-proc_ptr Current;
+proc_ptr current;
 
 /* the next pid to be assigned */
-unsigned int next_pid = SENTINELPID;
+unsigned int new_pid = SENTINELPID;
 
 /* initiates dispatch */
-int ready_to_start = 0;
+int starting = 1;
 
 /* ready list */
 proc_ptr ready_list[6];
@@ -60,15 +61,30 @@ void startup() {
 
    /* initialize the process table */
    for (int i = 0; i < MAXPROC; i++) {
-      ProcTable[i].next_proc_ptr = NULL;
-      ProcTable[i].child_proc_ptr = NULL;
-      ProcTable[i].next_sibling_ptr = NULL;
-      ProcTable[i].pid = -1;
-      ProcTable[i].priority = 0;
-      ProcTable[i].start_func = NULL;
-      ProcTable[i].stack = NULL;
-      ProcTable[i].stacksize = 0;
-      ProcTable[i].status = 0;
+      proc_tbl[i].next_proc_ptr = NULL;
+      proc_tbl[i].prev_proc_ptr = NULL;
+      proc_tbl[i].next_sibling_ptr = NULL;
+      proc_tbl[i].prev_sibling_ptr = NULL;
+      proc_tbl[i].parent_proc_ptr = NULL;
+      proc_tbl[i].pid = 0;
+      proc_tbl[i].priority = 0;
+      proc_tbl[i].start_func = NULL;
+      proc_tbl[i].stack = NULL;
+      proc_tbl[i].stacksize = 0;
+      proc_tbl[i].status = STATUS_EMPTY;
+
+      proc_tbl[i].children.p_head = NULL;
+      proc_tbl[i].children.p_tail = NULL;
+      proc_tbl[i].children.count = 0;
+      proc_tbl[i].children.offset = 0;
+   }
+
+   /* initialize ready process list*/
+   for (int i = 0; i <= MINPRIORITY; i++) {
+      ready_procs[i].p_head = NULL;
+      ready_procs[i].p_tail = NULL;
+      ready_procs[i].count = 0;
+      ready_procs[i].offset = 0;
    }
 
    if (DEBUG && debugflag)
@@ -79,21 +95,29 @@ void startup() {
    /* startup a sentinel process */
    if (DEBUG && debugflag)
        console("startup(): calling fork1() for sentinel\n");
-   result = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK,
-                   SENTINELPRIORITY);
+
+   result = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK, SENTINELPRIORITY);
+   
    if (result < 0) {
       if (DEBUG && debugflag)
          console("startup(): fork1 of sentinel returned error, halting...\n");
       halt(1);
    }
 
+   /* initialize current pointer to sentinel */
+   /* set current's next process pointer to following position in process table*/
+   current = &proc_tbl[0];
+   current->next_proc_ptr = &proc_tbl[1];
+
    /* initiate dispatch in fork1 */
-   ready_to_start = 1;
+   starting = 0;
   
    /* start the test process */
    if (DEBUG && debugflag)
       console("startup(): calling fork1() for start1\n");
+
    result = fork1("start1", start1, NULL, 2 * USLOSS_MIN_STACK, 1);
+   
    if (result < 0) {
       console("startup(): fork1 for start1 returned an error, halting...\n");
       halt(1);
@@ -127,7 +151,7 @@ void finish() {
                 the priority to be assigned to the child process.
    Returns - the process id of the created child or -1 if no child could
              be created or if priority is not between max and min priority.
-   Side Effects - ReadyList is changed, ProcTable is changed, Current
+   Side Effects - ReadyList is changed, proc_tbl is changed, current
                   process information changed
    ------------------------------------------------------------------------ */
 int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) {
@@ -141,12 +165,13 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
 
    /* return if stack size is too small */
    if (stacksize < USLOSS_MIN_STACK) {
-      return;
+      console("fork1(): Stack size too small. Halting...\n");
+      halt(1);
    }
 
    /* find an empty slot in the process table */
    for (int i = 0; i < MAXPROC; i++) {
-      if (ProcTable[i].pid == -1) {
+      if (proc_tbl[i].status == STATUS_EMPTY) {
          proc_slot = i;
          break;
       }
@@ -156,52 +181,77 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       }
    }
 
-   /* fill-in entry in process table */
+   /* return if name is too long */
    if (strlen(name) >= (MAXNAME - 1)) {
       console("fork1(): Process name is too long. Halting...\n");
       halt(1);
    }
-   strcpy(ProcTable[proc_slot].name, name);
 
-   /* save the entry point for the new process */
-   ProcTable[proc_slot].start_func = f;
+   /* fill-in entry in process table */
+   strcpy(proc_tbl[proc_slot].name, name);
+   proc_tbl[proc_slot].start_func = f;
+   proc_tbl[proc_slot].stacksize = stacksize;
+   proc_tbl[proc_slot].stack = malloc(stacksize);
+   proc_tbl[proc_slot].pid = new_pid;
+   proc_tbl[proc_slot].priority = priority;
+   proc_tbl[proc_slot].status = STATUS_READY;
 
-   /* allocate stack */
-   ProcTable[proc_slot].stacksize = stacksize;
-   ProcTable[proc_slot].stack = malloc(stacksize);
-
-   /* set pid */
-   ProcTable[proc_slot].pid = next_pid;
-   next_pid++;
+   new_pid++;
 
    if ( arg == NULL )
-      ProcTable[proc_slot].start_arg[0] = '\0';
+      proc_tbl[proc_slot].start_arg[0] = '\0';
    else if (strlen(arg) >= (MAXARG - 1)) {
       console("fork1(): Argument too long. Halting...\n");
       halt(1);
    } else {
-      strcpy(ProcTable[proc_slot].start_arg, arg);
+      strcpy(proc_tbl[proc_slot].start_arg, arg);
+   }
+
+   if (current != NULL) {
+      list_add_node(current->children, &proc_tbl[proc_slot]);
+      proc_tbl[proc_slot].parent_proc_ptr = current;
    }
 
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC) */
-   context_init(&(ProcTable[proc_slot].state), psr_get(),
-                ProcTable[proc_slot].stack, 
-                ProcTable[proc_slot].stacksize, launch);
+   context_init(&(proc_tbl[proc_slot].state), psr_get(),
+                proc_tbl[proc_slot].stack, 
+                proc_tbl[proc_slot].stacksize, launch);
 
    /* for future phase(s) */
-   p1_fork(ProcTable[proc_slot].pid);
+   p1_fork(proc_tbl[proc_slot].pid);
 
    /* add to ready list */
-   add_to_ready_list(&ProcTable[proc_slot]);
+   add_ready_proc(&proc_tbl[proc_slot]);
 
    // TODO:
-   if (ready_to_start) {
+   if (!starting) {
       dispatcher();
    }
 
 
 }  /* fork1 */
+
+void list_add_node(List current_proc, proc_ptr new_node) {
+
+   if (current_proc.p_head == NULL) {
+      /* list is empty */
+      current_proc.p_head = new_node;
+      current_proc.p_tail = new_node;
+   } else if (current_proc.p_head->next_proc_ptr == NULL) {
+      /* list has only 1 node -- add to end */
+      current_proc.p_head->next_proc_ptr = new_node;
+      new_node->prev_proc_ptr = current_proc.p_head;
+      current_proc.p_tail = new_node;
+   } else {
+      /* list has more than 1 node -- add to end */
+      current_proc.p_tail->next_proc_ptr = new_node;
+      new_node->prev_proc_ptr = current_proc.p_tail;
+      current_proc.p_tail = new_node;
+   }
+
+   current_proc.count++;
+}
 
 /* ------------------------------------------------------------------------
    Name - launch
@@ -222,10 +272,10 @@ void launch()
    enableInterrupts();
 
    /* Call the function passed to fork1, and capture its return value */
-   result = Current->start_func(Current->start_arg);
+   result = current->start_func(current->start_arg);
 
    if (DEBUG && debugflag)
-      console("Process %d returned to launch\n", Current->pid);
+      console("Process %d returned to launch\n", current->pid);
 
    quit(result);
 
@@ -260,28 +310,65 @@ int join(int *code) {
    ------------------------------------------------------------------------ */
 void quit(int code) {
 
-   p1_quit(Current->pid);
+   p1_quit(current->pid);
+
+   // TODO:
+   // update proc table
+
 } /* quit */
 
-proc_ptr get_next_ready_proc() {
+proc_ptr get_ready_proc(void) {
    // TODO:
-   // pop next entry from the ready list
-   for (int i = 0; i < SENTINELPRIORITY; i++) {
+   for (int i = 0; i <= MINPRIORITY; i++) {
    // if list is not empty
-      if (ready_list[i] != NULL) {
-         // TODO:
-         // pop list head from correlating process priority
-         proc_ptr ready_proc = pop_proc();
+      if (ready_procs[i].count > 0) {
+         proc_ptr ready_proc = pop_proc(i);
          return ready_proc;
       }
    }
    return NULL;
 }
 
-void add_to_ready_list(proc_struct *new_ready_proc) {
+proc_ptr pop_proc(int priority) {
+   // TODO:
+   // get next proc and adjust linked list pointers
+   proc_ptr proc_to_pop = ready_procs[priority].p_head;
+
+   if (ready_procs[priority].p_head == ready_procs[priority].p_tail) {
+      ready_procs[priority].p_head = NULL;
+      ready_procs[priority].p_tail = NULL;
+   } else {
+      ready_procs[priority].p_head = ready_procs[priority].p_head->next_proc_ptr;
+      ready_procs[priority].p_head->prev_proc_ptr = NULL;
+   }
+
+   ready_procs[priority].count--;
+
+   return proc_to_pop;
+}
+
+void add_ready_proc(proc_ptr new_ready_proc) {
    // TODO:
    // add entry to ready list
-   ready_list[new_ready_proc->priority - 1];
+   int priority = (new_ready_proc->priority - 1);
+
+   if (ready_procs[priority].p_head == NULL) {
+      /* list is empty */
+      ready_procs[priority].p_head = new_ready_proc;
+      ready_procs[priority].p_tail = new_ready_proc;
+   } else if (ready_procs[priority].p_head->next_proc_ptr == NULL) {
+      /* list has only 1 node -- add to end */
+      ready_procs[priority].p_head->next_proc_ptr = new_ready_proc;
+      new_ready_proc->prev_proc_ptr = ready_procs[priority].p_head;
+      ready_procs[priority].p_tail = new_ready_proc;
+   } else {
+      /* list has more than 1 node -- add to end */
+      ready_procs[priority].p_tail->next_proc_ptr = new_ready_proc;
+      new_ready_proc->prev_proc_ptr = ready_procs[priority].p_tail;
+      ready_procs[priority].p_tail = new_ready_proc;
+   }
+
+   ready_procs[priority].count++;
 }
 
 /* ------------------------------------------------------------------------
@@ -297,18 +384,22 @@ void add_to_ready_list(proc_struct *new_ready_proc) {
 void dispatcher(void) {
 
    proc_ptr next_process;
-   context *prev_context_ptr = NULL;
 
-   p1_switch(Current->pid, next_process->pid);
+   // HARD CODE -- CHANGE THIS
+   next_process->pid = (current->pid + 1);
+
+   context *prev_context_ptr = &current->state;
+
+   p1_switch(current->pid, next_process->pid);
 
    // find the next process to run
-   next_process = get_next_ready_proc();
+   next_process = get_ready_proc();
 
    // set current ptr to new process
-   Current = next_process;
+   current = next_process;
 
    // swap old process with new process
-   context_switch(prev_context_ptr, &Current->state);
+   context_switch(prev_context_ptr, &current->state);
 
 } /* dispatcher */
 
