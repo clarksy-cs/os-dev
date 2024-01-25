@@ -19,9 +19,9 @@ static void enableInterrupts();
 static void check_deadlock();
 void add_ready_proc(proc_struct *next_ready_proc);
 proc_ptr get_ready_proc();
-proc_ptr pop_proc();
 void list_add_node(List *current_proc, proc_ptr new_node);
-proc_ptr list_pop_node(List current_proc, proc_ptr rm_node);
+proc_ptr list_pop_node(List *current_proc);
+void clear_proc_entry(int target);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -35,13 +35,13 @@ proc_struct proc_tbl[MAXPROC];
 List ready_procs[6];
 
 /* current process ID */
-proc_ptr current;
+proc_ptr current = NULL;
 
 /* the next pid to be assigned */
 unsigned int new_pid = SENTINELPID;
 
 /* initiates dispatch */
-int starting = 1;
+int start_flag = 1;
 
 /* -------------------------- Functions ----------------------------------- */
 /* ------------------------------------------------------------------------
@@ -105,7 +105,7 @@ void startup() {
    current = &proc_tbl[0];
 
    /* initiate dispatch in fork1 */
-   starting = 0;
+   start_flag = 0;
   
    /* start the test process */
    if (DEBUG && debugflag)
@@ -152,6 +152,11 @@ void finish() {
 int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) {
 
    int proc_slot;
+
+   // TEST CODE ********* POSSIBLE SOLUTION
+   if (proc_tbl[1].pid == 2) {
+      start_flag = 1;
+   }
 
    if (DEBUG && debugflag)
       console("fork1(): creating process %s\n", name);
@@ -206,16 +211,16 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       strcpy(new_proc->start_arg, arg);
    }
 
-   if (current != NULL) {
+   if (current != NULL && current->pid != 1) {
       list_add_node(&current->children, new_proc);
       new_proc->parent_proc_ptr = current;
+      // TEST //
+      current->status = STATUS_JOIN_BLOCKED;
    }
 
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC) */
-   context_init(&(new_proc->state), psr_get(),
-                new_proc->stack, 
-                new_proc->stacksize, launch);
+   context_init(&(new_proc->state), psr_get(), new_proc->stack, new_proc->stacksize, launch);
 
    /* for future phase(s) */
    p1_fork(new_proc->pid);
@@ -223,9 +228,11 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    /* add to ready list */
    add_ready_proc(new_proc);
 
-   if (!starting) {
+   if (!start_flag) {
       dispatcher();
    }
+
+   return new_proc->pid;
 
 }  /* fork1 */
 
@@ -250,19 +257,19 @@ void list_add_node(List *current_proc, proc_ptr new_node) {
    current_proc->count++;
 }
 
-proc_ptr list_pop_node(List current_proc, proc_ptr rm_node) {
+proc_ptr list_pop_node(List *current_proc) {
 
-   rm_node = current_proc.p_head;
+   proc_ptr rm_node = current_proc->p_head;
 
-   if (current_proc.p_head == current_proc.p_tail) {
-      current_proc.p_head = NULL;
-      current_proc.p_tail = NULL;
+   if (current_proc->p_head == current_proc->p_tail) {
+      current_proc->p_head = NULL;
+      current_proc->p_tail = NULL;
    } else {
-      current_proc.p_head = current_proc.p_head->next_proc_ptr;
-      current_proc.p_head->prev_proc_ptr = NULL;
+      current_proc->p_head = current_proc->p_head->next_proc_ptr;
+      current_proc->p_head->prev_proc_ptr = NULL;
    }
 
-   current_proc.count--;
+   current_proc->count--;
 
    return rm_node;
 }
@@ -309,16 +316,35 @@ void launch()
                   parent is removed from the ready list and blocked.
    ------------------------------------------------------------------------ */
 int join(int *code) {
+
    // ******WORK IN PROGRESS *************
-   
-   if (current->children.count == 0) {
-      return -2;
+   // TODO: figure out how to get start1 to loop here until
+   //       all children quit
+
+   // check if any child process has already quit
+   proc_ptr child = current->quitting_children.p_head;
+   int child_pid = 0;
+
+   while (child != NULL) {
+      if (child->status == -3) {
+         // child has quit, set termination code
+         *code = child->status;
+
+         // remove child from the children list
+         child = list_pop_node(&current->quitting_children);
+         child_pid = child->pid;
+         clear_proc_entry(child_pid);
+         return child_pid;
+      }
+      child = child->next_proc_ptr;
    }
 
-   if (current->children.count > 0) {
-      current->status = STATUS_JOIN_BLOCKED;
-      dispatcher();
-   }
+   // no child process has quit, block the parent
+   current->status = STATUS_JOIN_BLOCKED;
+   dispatcher();
+
+
+   return -2;
 
 } /* join */
 
@@ -334,65 +360,68 @@ int join(int *code) {
    ------------------------------------------------------------------------ */
 void quit(int code) {
 
-   p1_quit(current->pid);
+   if (code == 0) {
+      exit(0);
+   }
+   
+   current->status = STATUS_QUIT;
 
-   // TODO:
-   // update proc table
+   /* find parent process */
+   if (current->parent_proc_ptr != NULL) {
+      /*remove from children list and add to quit children list*/
+      proc_ptr child = list_pop_node(&current->parent_proc_ptr->children);
+      child->status = code;
+      list_add_node(&current->parent_proc_ptr->quitting_children, child);
+   }
+
+   if (current->parent_proc_ptr != NULL && current->parent_proc_ptr->status == STATUS_JOIN_BLOCKED) {
+      add_ready_proc(current->parent_proc_ptr);
+   }
+
+   dispatcher();
+   p1_quit(current->pid);
+   enableInterrupts();
 
 } /* quit */
 
 proc_ptr get_ready_proc(void) {
-   // TODO:
+
    for (int i = 0; i <= MINPRIORITY; i++) {
-   // if list is not empty
+   
       if (ready_procs[i].count > 0) {
-         proc_ptr ready_proc = pop_proc(i);
+         /* if list is not empty */
+         proc_ptr ready_proc = list_pop_node(&ready_procs[i]);
          return ready_proc;
       }
    }
    return NULL;
 }
 
-proc_ptr pop_proc(int priority) {
-   // TODO:
-   // get next proc and adjust linked list pointers
-   proc_ptr proc_to_pop = ready_procs[priority].p_head;
-
-   if (ready_procs[priority].p_head == ready_procs[priority].p_tail) {
-      ready_procs[priority].p_head = NULL;
-      ready_procs[priority].p_tail = NULL;
-   } else {
-      ready_procs[priority].p_head = ready_procs[priority].p_head->next_proc_ptr;
-      ready_procs[priority].p_head->prev_proc_ptr = NULL;
-   }
-
-   ready_procs[priority].count--;
-
-   return proc_to_pop;
-}
-
 /* adds entry to ready list */
 void add_ready_proc(proc_ptr new_ready_proc) {
 
    int priority = (new_ready_proc->priority - 1);
+   new_ready_proc->status = STATUS_READY;
+   list_add_node(&ready_procs[priority], new_ready_proc);
+}
 
-   if (ready_procs[priority].p_head == NULL) {
-      /* list is empty */
-      ready_procs[priority].p_head = new_ready_proc;
-      ready_procs[priority].p_tail = new_ready_proc;
-   } else if (ready_procs[priority].p_head->next_proc_ptr == NULL) {
-      /* list has only 1 node -- add to end */
-      ready_procs[priority].p_head->next_proc_ptr = new_ready_proc;
-      new_ready_proc->prev_proc_ptr = ready_procs[priority].p_head;
-      ready_procs[priority].p_tail = new_ready_proc;
-   } else {
-      /* list has more than 1 node -- add to end */
-      ready_procs[priority].p_tail->next_proc_ptr = new_ready_proc;
-      new_ready_proc->prev_proc_ptr = ready_procs[priority].p_tail;
-      ready_procs[priority].p_tail = new_ready_proc;
-   }
+void clear_proc_entry(int target) {
+   proc_tbl[target].next_proc_ptr = NULL;
+   proc_tbl[target].prev_proc_ptr = NULL;
+   proc_tbl[target].next_sibling_ptr = NULL;
+   proc_tbl[target].prev_sibling_ptr = NULL;
+   proc_tbl[target].parent_proc_ptr = NULL;
+   proc_tbl[target].pid = 0;
+   proc_tbl[target].priority = 0;
+   proc_tbl[target].start_func = NULL;
+   proc_tbl[target].stack = NULL;
+   proc_tbl[target].stacksize = 0;
+   proc_tbl[target].status = STATUS_EMPTY;
+   proc_tbl[target].children.p_head = NULL;
+   proc_tbl[target].children.p_tail = NULL;
+   proc_tbl[target].children.count = 0;
+   proc_tbl[target].children.offset = 0;
 
-   ready_procs[priority].count++;
 }
 
 /* ------------------------------------------------------------------------
@@ -408,18 +437,28 @@ void add_ready_proc(proc_ptr new_ready_proc) {
 void dispatcher(void) {
 
    proc_ptr next_process;
-   context *prev_context_ptr = &current->state;
+   context *prev_context_ptr;
+
+   if (current->pid == 1) {
+      prev_context_ptr = NULL;
+   } else {
+      prev_context_ptr = &current->state;
+   }
 
    /* find the next process to run */
    next_process = get_ready_proc();
 
-   p1_switch(current->pid, next_process->pid);
+   if (next_process != NULL) {
 
-   /* set current ptr to new process */
-   current = next_process;
+      p1_switch(current->pid, next_process->pid);
 
-   /* swap old process with new process */
-   context_switch(prev_context_ptr, &current->state);
+      /* set current ptr to new process */
+      current = next_process;
+      current->status = STATUS_RUNNING;
+
+      /* swap old process with new process */
+      context_switch(prev_context_ptr, &current->state);
+   }
 
 } /* dispatcher */
 
