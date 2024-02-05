@@ -10,7 +10,11 @@ typedef struct proc_struct * proc_ptr;
 #define STATUS_QUIT           3
 #define STATUS_JOIN_BLOCKED   4
 #define STATUS_ZAP_BLOCKED    5
-#define STATUS_LAST           6
+#define STATUS_ZAPPED         6
+#define STATUS_LAST           7
+
+#define TRUE                  1
+#define FALSE                 0
 
 typedef struct {
    proc_ptr p_head;
@@ -40,7 +44,7 @@ struct proc_struct {
    char          *stack;
    unsigned int   stacksize;
    int            status;            /* READY, BLOCKED, QUIT, etc. */
-   /* other fields as needed... */
+   int            exit_code;
 };
 
 struct psr_bits {

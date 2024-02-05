@@ -26,6 +26,10 @@ void check_kernel_mode(void);
 void clock_handler(int dev, void *arg);
 void dump_processes(void);
 int getpid(void);
+int zap(int pid);
+int is_zapped(void);
+int block_me(int new_status);
+int unblock_proc(int pid);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -76,6 +80,7 @@ void startup(void) {
       proc_tbl[i].stack = NULL;
       proc_tbl[i].stacksize = 0;
       proc_tbl[i].status = STATUS_EMPTY;
+      proc_tbl[i].exit_code = 0;
 
       proc_tbl[i].children.p_head = NULL;
       proc_tbl[i].children.p_tail = NULL;
@@ -463,6 +468,7 @@ void dispatcher(void) {
 
    proc_ptr next_process;
    context *prev_context_ptr;
+   int dispatch_flag = FALSE;
 
    /* null previous contect ptr for first process */
    if (current->pid == 1) {
@@ -471,10 +477,24 @@ void dispatcher(void) {
       prev_context_ptr = &current->state;
    }
 
-   /* find the next process to run */
-   next_process = get_ready_proc();
+   /* enforce priority handling */
+   if (current != NULL && current->status == STATUS_RUNNING) {
+      for (int i = 0; i <= current->priority; i++) {
+         if (ready_procs[i].count > 0) {
+            dispatch_flag = FALSE;
+         }
+      }
+   } else {
+      dispatch_flag = TRUE;
+   }
 
-   if (next_process != NULL) {
+   /* find the next process to run */
+   if (dispatch_flag) {
+      next_process = get_ready_proc();
+   }
+   
+
+   if (next_process != NULL && next_process != current) {
 
       p1_switch(current->pid, next_process->pid);
 
@@ -609,8 +629,51 @@ void dump_processes(void) {
    }
 }
 
-/* TODO */
+/* returns the PID of the currently running process */
 int getpid(void) {
-   /* code ..... */
-   return new_pid;
+
+   return current->pid;
+}
+
+/* marks a process as being zapped. */
+int zap(int pid) { 
+
+   if (pid == current->pid) {
+      console("Process attemped to zap self. Halting...\n");
+      halt(1);
+   }
+
+   /* TODO */
+
+   return 0;
+}
+
+/* returns a Boolean value indicating whether a process is zapped */
+int is_zapped(void) {
+
+   if (current->status == STATUS_ZAPPED) {
+      return TRUE;
+   }
+
+   return FALSE;
+}
+
+/* blocks the calling process. */
+int block_me(int new_status) {
+
+   /* TODO */
+
+   return -1; // if processs was zapped while blocked
+   return 0;  // otherwise
+
+}
+
+/* unblocks the process with pid that had previously been blocked by block_me() */
+int unblock_proc(int pid) {
+
+   /* TODO */
+
+   return -2;  // if indicated process was not blocked.. does not exist, current proccess, etc
+   return -1;  // if the calling process was zapped
+   return 0 ;  // otherwise
 }

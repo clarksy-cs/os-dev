@@ -53,7 +53,6 @@ extern  int     read_cur_start_time(void);
 extern  void    time_slice(void);
 extern  void    dispatcher(void);
 extern	int		readtime(void);
-
 extern	void	p1_fork(int pid);
 extern	void	p1_quit(int pid);
 extern	void	p1_switch(int old, int new);
