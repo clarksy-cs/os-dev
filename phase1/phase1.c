@@ -30,6 +30,7 @@ int zap(int pid);
 int is_zapped(void);
 int block_me(int new_status);
 int unblock_proc(int pid);
+int get_next_pid(void);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -46,7 +47,7 @@ List ready_procs[6];
 proc_ptr current = NULL;
 
 /* the next pid to be assigned */
-unsigned int new_pid = SENTINELPID;
+unsigned int next_pid = SENTINELPID;
 
 /* initiates dispatch */
 int start_flag = 1;
@@ -74,13 +75,15 @@ void startup(void) {
       proc_tbl[i].next_sibling_ptr = NULL;
       proc_tbl[i].prev_sibling_ptr = NULL;
       proc_tbl[i].parent_proc_ptr = NULL;
-      proc_tbl[i].pid = 0;
-      proc_tbl[i].priority = 0;
+      proc_tbl[i].pid = -1;
+      proc_tbl[i].priority = -1;
       proc_tbl[i].start_func = NULL;
       proc_tbl[i].stack = NULL;
       proc_tbl[i].stacksize = 0;
       proc_tbl[i].status = STATUS_EMPTY;
       proc_tbl[i].exit_code = 0;
+      proc_tbl[i].runtime = -1;
+      proc_tbl[i].zap_flag = FALSE;
 
       proc_tbl[i].children.p_head = NULL;
       proc_tbl[i].children.p_tail = NULL;
@@ -115,7 +118,7 @@ void startup(void) {
    }
 
    /* initialize current pointer to sentinel */
-   current = &proc_tbl[0];
+   current = &proc_tbl[1];
 
    /* initiate dispatch in fork1 */
    start_flag = 0;
@@ -166,11 +169,6 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
 
    int proc_slot;
 
-   // if starting
-   if (proc_tbl[1].pid == 2) {
-      start_flag = 1;
-   }
-
    if (DEBUG && debugflag)
       console("fork1(): creating process %s\n", name);
 
@@ -188,17 +186,8 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       halt(1);
    }
 
-   /* find an empty slot in the process table */
-   for (int i = 0; i < MAXPROC; i++) {
-      if (proc_tbl[i].status == STATUS_EMPTY) {
-         proc_slot = i;
-         break;
-      }
-      if (i == MAXPROC - 1) {
-         /* no empty slots available */
-         return -1;
-      }
-   }
+   next_pid = get_next_pid();
+   proc_slot = next_pid % MAXPROC;
 
    /* pointer for new process in process table*/
    proc_ptr new_proc = &proc_tbl[proc_slot];
@@ -209,11 +198,10 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    new_proc->start_func = f;
    new_proc->stacksize = stacksize;
    new_proc->stack = malloc(stacksize);
-   new_proc->pid = new_pid;
+   new_proc->pid = next_pid;
    new_proc->priority = priority;
    new_proc->status = STATUS_READY;
 
-   new_pid++;
    num_proc++;
 
    if ( arg == NULL )
@@ -225,7 +213,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       strcpy(new_proc->start_arg, arg);
    }
 
-   if (current != NULL && current->pid != 1) {
+   if (current != NULL && current->priority != SENTINELPRIORITY) {
       list_add_node(&current->children, new_proc);
       new_proc->parent_proc_ptr = current;
    }
@@ -331,32 +319,26 @@ void launch(void)
    ------------------------------------------------------------------------ */
 int join(int *code) {
 
-   proc_ptr parent = NULL;
    proc_ptr child = NULL;
-   int child_pid = 0;
+   int child_pid = -1;
 
-   // store calling process in parent variable
-   if (current->parent_proc_ptr == NULL) {
-      parent = current;
-   }
+   while (current->children.count > 0 || current->quitting_children.count > 0) {
 
-   while (parent->children.count > 0 || parent->quitting_children.count > 0) {
-
-      if (parent->quitting_children.p_head != NULL) {
-         child = parent->quitting_children.p_head;
+      if (current->quitting_children.p_head != NULL) {
+         child = current->quitting_children.p_head;
          // child has quit, set termination code
-         *code = child->status;
+         *code = child->exit_code;
 
          // remove child from the children list
-         child = list_pop_node(&parent->quitting_children);
+         child = list_pop_node(&current->quitting_children);
          child_pid = child->pid;
          clear_proc_entry(child_pid);
          return child_pid;
       }
 
       // no child process has quit, block the parent
-      parent->status = STATUS_JOIN_BLOCKED;
-      list_pop_node(&ready_procs[parent->priority - 1]);
+      current->status = STATUS_JOIN_BLOCKED;
+      list_pop_node(&ready_procs[current->priority - 1]);
       dispatcher();
    }
 
@@ -383,7 +365,7 @@ void quit(int code) {
    if (current->parent_proc_ptr != NULL) {
       /*remove from children list and add to quit children list*/
       proc_ptr child = list_pop_node(&current->parent_proc_ptr->children);
-      child->status = code;
+      child->exit_code = code;
       list_add_node(&current->parent_proc_ptr->quitting_children, child);
    }
 
@@ -406,12 +388,6 @@ proc_ptr get_ready_proc(void) {
    for (int i = 0; i <= MINPRIORITY; i++) {
       if (ready_procs[i].count > 0) {
          /* if list is not empty */
-         if (ready_procs[i].p_head->parent_proc_ptr != NULL 
-         && ready_procs[i].p_head->parent_proc_ptr->priority < ready_procs[i].p_head->priority
-         && ready_procs[i].p_head->parent_proc_ptr->status == STATUS_RUNNING) {
-            /* return NULL if parent process is running and higher priority */
-            return NULL;
-         }
          proc_ptr ready_proc = list_pop_node(&ready_procs[i]);
          return ready_proc;
       }
@@ -428,28 +404,27 @@ void add_ready_proc(proc_ptr new_ready_proc) {
 }
 
 void clear_proc_entry(int target) {
-   
-   for (int i = 0; i < MAXPROC; i++) {
-      if (proc_tbl[i].pid == target) {
-         target = i;
 
-         proc_tbl[target].next_proc_ptr = NULL;
-         proc_tbl[target].prev_proc_ptr = NULL;
-         proc_tbl[target].next_sibling_ptr = NULL;
-         proc_tbl[target].prev_sibling_ptr = NULL;
-         proc_tbl[target].parent_proc_ptr = NULL;
-         proc_tbl[target].pid = 0;
-         proc_tbl[target].priority = 0;
-         proc_tbl[target].start_func = NULL;
-         proc_tbl[target].stack = NULL;
-         proc_tbl[target].stacksize = 0;
-         proc_tbl[target].status = STATUS_EMPTY;
-         proc_tbl[target].children.p_head = NULL;
-         proc_tbl[target].children.p_tail = NULL;
-         proc_tbl[target].children.count = 0;
-         proc_tbl[target].children.offset = 0;
-      }
-   }
+   target = target % MAXPROC;
+
+   proc_tbl[target].next_proc_ptr = NULL;
+   proc_tbl[target].prev_proc_ptr = NULL;
+   proc_tbl[target].next_sibling_ptr = NULL;
+   proc_tbl[target].prev_sibling_ptr = NULL;
+   proc_tbl[target].parent_proc_ptr = NULL;
+   proc_tbl[target].pid = -1;
+   proc_tbl[target].priority = -1;
+   proc_tbl[target].start_func = NULL;
+   proc_tbl[target].stack = NULL;
+   proc_tbl[target].stacksize = 0;
+   proc_tbl[target].status = STATUS_EMPTY;
+   proc_tbl[target].exit_code = 0;
+   proc_tbl[target].runtime = -1;
+   proc_tbl[target].zap_flag = FALSE;
+   proc_tbl[target].children.p_head = NULL;
+   proc_tbl[target].children.p_tail = NULL;
+   proc_tbl[target].children.count = 0;
+   proc_tbl[target].children.offset = 0;
 
    num_proc--;
 }
@@ -481,7 +456,9 @@ void dispatcher(void) {
    if (current != NULL && current->status == STATUS_RUNNING) {
       for (int i = 0; i <= current->priority; i++) {
          if (ready_procs[i].count > 0) {
-            dispatch_flag = FALSE;
+            dispatch_flag = TRUE;
+            current->status = STATUS_JOIN_BLOCKED;
+            list_pop_node(&ready_procs[current->priority - 1]);
          }
       }
    } else {
@@ -490,11 +467,10 @@ void dispatcher(void) {
 
    /* find the next process to run */
    if (dispatch_flag) {
-      next_process = get_ready_proc();
-   }
-   
 
-   if (next_process != NULL && next_process != current) {
+      next_process = get_ready_proc();
+
+      if (next_process != NULL && next_process != current) {
 
       p1_switch(current->pid, next_process->pid);
 
@@ -504,6 +480,7 @@ void dispatcher(void) {
 
       /* swap old process with new process */
       context_switch(prev_context_ptr, &current->state);
+      }
    }
 
 } /* dispatcher */
@@ -585,7 +562,7 @@ void check_kernel_mode(void) {
 /* prints process table info to console */
 void dump_processes(void) {
 
-   console("PID\tParent\tPriority\tStatus\t\t# Kids\tCPUtime\tName\n"); 
+   console("PID\tParent\tPriority  Status\t# Kids\tCPUtime  Name\n"); 
 
    for (int i = 0; i < MAXPROC; i++) {
 
@@ -597,14 +574,14 @@ void dump_processes(void) {
          console("%d\t", proc_tbl[i].parent_proc_ptr->pid);
       }
 
-      console("%d\t\t", proc_tbl[i].priority);
+      console("%d\t  ", proc_tbl[i].priority);
 
       switch (proc_tbl[i].status) {
          case 0:
             console("EMPTY\t\t");
             break;
          case 1:
-            console("RUNNING\t\t");
+            console("RUNNING\t");
             break;
          case 2:
             console("READY\t\t");
@@ -613,18 +590,18 @@ void dump_processes(void) {
             console("QUIT\t\t");
             break;
          case 4:
-            console("jOIN_BLOCKED\t\t");
+            console("JOIN BLOCK\t");
             break;
          case 5:
-            console("ZAP_BLOCKED\t\t");
+            console("ZAP BLOCK\t");
             break;
          case 6:
-            console("LAST\t\t");
+            console("LAST\t");
             break;
       }
 
       console("%d\t", proc_tbl[i].children.count);
-      console("%d\t", 0);
+      console("%d\t ", proc_tbl[i].runtime);
       console("%s\n", proc_tbl[i].name);
    }
 }
@@ -638,12 +615,19 @@ int getpid(void) {
 /* marks a process as being zapped. */
 int zap(int pid) { 
 
+   int proc_slot = pid % MAXPROC;
+   proc_ptr proc_to_zap = &proc_tbl[proc_slot];
+
    if (pid == current->pid) {
       console("Process attemped to zap self. Halting...\n");
       halt(1);
    }
 
-   /* TODO */
+   /*TODO */
+   // block process
+   // call dispatcher
+   // add zapper to zapper list
+   // update quit to wake up zappers / parents
 
    return 0;
 }
@@ -651,17 +635,19 @@ int zap(int pid) {
 /* returns a Boolean value indicating whether a process is zapped */
 int is_zapped(void) {
 
-   if (current->status == STATUS_ZAPPED) {
-      return TRUE;
-   }
-
-   return FALSE;
+   return current->zap_flag;
 }
 
 /* blocks the calling process. */
 int block_me(int new_status) {
 
-   /* TODO */
+   if (new_status <= 10) {
+      console("block_me(): Parameter must be larger than 10. Halting...\n");
+      halt(1);
+   }
+
+   current->status = new_status;
+   dispatcher();
 
    return -1; // if processs was zapped while blocked
    return 0;  // otherwise
@@ -671,9 +657,35 @@ int block_me(int new_status) {
 /* unblocks the process with pid that had previously been blocked by block_me() */
 int unblock_proc(int pid) {
 
-   /* TODO */
+   int proc_slot = pid % MAXPROC;
+   proc_ptr proc_to_unblock = &proc_tbl[proc_slot];
 
-   return -2;  // if indicated process was not blocked.. does not exist, current proccess, etc
+   if (current->pid == proc_to_unblock->pid
+      || proc_to_unblock->status == STATUS_EMPTY
+      || proc_to_unblock->status <= 10) {
+
+         return -2;
+      }
+   
+   add_ready_proc(proc_to_unblock);
+   dispatcher();
+
    return -1;  // if the calling process was zapped
    return 0 ;  // otherwise
+}
+
+int get_next_pid(void) { // TEST04 WHY IS 50 RUNNING TWICE??
+
+   int new_pid = -1;
+   int proc_slot = next_pid % MAXPROC;
+
+   if (num_proc < MAXPROC) {
+      while (num_proc < MAXPROC && proc_tbl[proc_slot].status != STATUS_EMPTY) {
+
+         next_pid++;
+         proc_slot = next_pid % MAXPROC;
+      }
+      new_pid = next_pid++;
+   }
+   return new_pid;
 }

@@ -10,8 +10,7 @@ typedef struct proc_struct * proc_ptr;
 #define STATUS_QUIT           3
 #define STATUS_JOIN_BLOCKED   4
 #define STATUS_ZAP_BLOCKED    5
-#define STATUS_ZAPPED         6
-#define STATUS_LAST           7
+#define STATUS_LAST           6
 
 #define TRUE                  1
 #define FALSE                 0
@@ -45,6 +44,8 @@ struct proc_struct {
    unsigned int   stacksize;
    int            status;            /* READY, BLOCKED, QUIT, etc. */
    int            exit_code;
+   int            runtime;
+   int            zap_flag;
 };
 
 struct psr_bits {
