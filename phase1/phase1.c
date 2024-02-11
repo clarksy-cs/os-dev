@@ -663,9 +663,18 @@ int zap(int pid) {
    int proc_slot = pid % MAXPROC;
    proc_ptr proc_to_zap = &proc_tbl[proc_slot];
 
-   if (pid == current->pid) {
+   if (proc_to_zap->pid == current->pid) {
       console("zap: process attempted to zap itself.\n");
       halt(1);
+   }
+
+   if (proc_to_zap->status == STATUS_EMPTY) {
+      console("zap: attempting to zap a process that does not exist.\n");
+      halt(1);
+   }
+
+   if (proc_to_zap->status == STATUS_QUIT) {
+      return 0;
    }
 
    /* set zap flag */
