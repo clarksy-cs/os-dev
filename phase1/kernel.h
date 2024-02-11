@@ -44,6 +44,7 @@ struct proc_struct {
    unsigned int   stacksize;
    int            status;            /* READY, BLOCKED, QUIT, etc. */
    int            exit_code;
+   int            start_time;
    int            runtime;
    int            zap_flag;
 };
@@ -67,5 +68,6 @@ union psr_values {
 #define MAXPRIORITY 1
 #define SENTINELPID 1
 #define SENTINELPRIORITY LOWEST_PRIORITY
+#define MAXTIME 80
 
 

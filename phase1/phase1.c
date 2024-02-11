@@ -31,6 +31,9 @@ int is_zapped(void);
 int block_me(int new_status);
 int unblock_proc(int pid);
 int get_next_pid(void);
+int read_cur_start_time(void);
+void time_slice(void);
+int readtime(void);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -65,8 +68,8 @@ int num_proc = 0;
    Side Effects - lots, starts the whole thing
    ----------------------------------------------------------------------- */
 void startup(void) {
-
-   int result; /* value returned by call to fork1() */
+   /* value returned by call to fork1() */
+   int result;
 
    /* initialize the process table */
    for (int i = 0; i < MAXPROC; i++) {
@@ -82,6 +85,7 @@ void startup(void) {
       proc_tbl[i].stacksize = 0;
       proc_tbl[i].status = STATUS_EMPTY;
       proc_tbl[i].exit_code = 0;
+      proc_tbl[i].start_time = -1;
       proc_tbl[i].runtime = -1;
       proc_tbl[i].zap_flag = FALSE;
 
@@ -102,7 +106,7 @@ void startup(void) {
    if (DEBUG && debugflag)
       console("startup(): initializing the Ready & Blocked lists\n");
 
-   /* Initialize the clock interrupt handler */
+   /* initialize the clock interrupt handler */
    int_vec[CLOCK_INT] = clock_handler;
 
    /* startup a sentinel process */
@@ -170,23 +174,40 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    int proc_slot;
 
    if (DEBUG && debugflag)
-      console("fork1(): creating process %s\n", name);
+      console("fork1(): Creating process %s\n", name);
 
    /* test if in kernel mode; halt if in user mode */
    check_kernel_mode();
 
-   /* return if stack size is too small */
+   /* returns if stack size is too small */
    if (stacksize < USLOSS_MIN_STACK) {
       return -2;
    }
 
-   /* return if name is too long */
+   /* returns if priority is out of range */
+   if (priority < 0 || priority > SENTINELPRIORITY) {
+      return -1;
+   }
+
+   /* returns if function or name is NULL */
+   if (f == NULL || name == NULL) {
+      return -1;
+   }
+
+   /* returns if name is too long */
    if (strlen(name) >= (MAXNAME - 1)) {
       console("fork1(): Process name is too long. Halting...\n");
       halt(1);
    }
 
+   /* get next PID */
    next_pid = get_next_pid();
+
+   /* if proc table is full */
+   if (next_pid == -1) {
+      return -1;
+   }
+
    proc_slot = next_pid % MAXPROC;
 
    /* pointer for new process in process table*/
@@ -201,6 +222,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    new_proc->pid = next_pid;
    new_proc->priority = priority;
    new_proc->status = STATUS_READY;
+   new_proc->runtime = 0;
 
    num_proc++;
 
@@ -320,9 +342,13 @@ void launch(void)
 int join(int *code) {
 
    proc_ptr child = NULL;
-   int child_pid = -1;
+   int child_pid = -3;
 
    while (current->children.count > 0 || current->quitting_children.count > 0) {
+
+      if (current->zap_flag == TRUE) {
+         return -1;
+      }
 
       if (current->quitting_children.p_head != NULL) {
          child = current->quitting_children.p_head;
@@ -342,8 +368,7 @@ int join(int *code) {
       dispatcher();
    }
 
-   // parent has no children
-   return -2;
+   return -2; // parent has no children
 
 } /* join */
 
@@ -359,7 +384,24 @@ int join(int *code) {
    ------------------------------------------------------------------------ */
 void quit(int code) {
 
+   if (current->children.count > 0) {
+      console("quit(): Process with active children attempting to quit\n");
+      halt(1);
+   }
+
    current->status = STATUS_QUIT;
+   current->runtime += readtime();
+
+   /* wake up zappers */
+   while (current->zappers.count > 0) {
+      /* if zapped and has quitting children */
+      while (current->quitting_children.count > 0) {
+         proc_ptr qchild = list_pop_node(&current->quitting_children);
+         clear_proc_entry(qchild->pid);
+      }
+      proc_ptr zapper = list_pop_node(&current->zappers);
+      add_ready_proc(zapper);
+   }
 
    /* find parent process */
    if (current->parent_proc_ptr != NULL) {
@@ -419,12 +461,15 @@ void clear_proc_entry(int target) {
    proc_tbl[target].stacksize = 0;
    proc_tbl[target].status = STATUS_EMPTY;
    proc_tbl[target].exit_code = 0;
+   proc_tbl[target].start_time = -1;
    proc_tbl[target].runtime = -1;
    proc_tbl[target].zap_flag = FALSE;
    proc_tbl[target].children.p_head = NULL;
    proc_tbl[target].children.p_tail = NULL;
    proc_tbl[target].children.count = 0;
    proc_tbl[target].children.offset = 0;
+
+   free(proc_tbl[target].stack);
 
    num_proc--;
 }
@@ -444,6 +489,7 @@ void dispatcher(void) {
    proc_ptr next_process;
    context *prev_context_ptr;
    int dispatch_flag = FALSE;
+   int current_time = sys_clock();
 
    /* null previous contect ptr for first process */
    if (current->pid == 1) {
@@ -454,11 +500,12 @@ void dispatcher(void) {
 
    /* enforce priority handling */
    if (current != NULL && current->status == STATUS_RUNNING) {
-      for (int i = 0; i <= current->priority; i++) {
+      for (int i = 0; i < current->priority; i++) {
          if (ready_procs[i].count > 0) {
             dispatch_flag = TRUE;
             current->status = STATUS_JOIN_BLOCKED;
             list_pop_node(&ready_procs[current->priority - 1]);
+            break;
          }
       }
    } else {
@@ -477,6 +524,7 @@ void dispatcher(void) {
       /* set current ptr to new process */
       current = next_process;
       current->status = STATUS_RUNNING;
+      current->start_time = current_time;   // set initial runtime for time slice
 
       /* swap old process with new process */
       context_switch(prev_context_ptr, &current->state);
@@ -523,7 +571,8 @@ static void check_deadlock(void) {
       halt(0);
    }
 
-   console("check_deadlock(): Processes active: %d -- Halting...\n", num_proc);
+   console("check_deadlock: numProc is %d\n", num_proc);
+   console("check_deadlock: processes still present, halting...\n");
    halt(1);
 } /* check_deadlock */
 
@@ -531,13 +580,13 @@ static void check_deadlock(void) {
 /* Disables the interrupts. */
 void disableInterrupts(void) {
 
-  /* turn the interrupts OFF iff we are in kernel mode */
+  /* turn the interrupts OFF if we are in kernel mode */
   if((PSR_CURRENT_MODE & psr_get()) == 0) {
-    //not in kernel mode
+    /* not in kernel mode */
     console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
     halt(1);
   } else
-    /* We ARE in kernel mode */
+    /* in kernel mode */
     psr_set( psr_get() & ~PSR_CURRENT_INT );
 } /* disableInterrupts */
 
@@ -545,16 +594,12 @@ static void enableInterrupts(void) {
    // TODO: write code for this function
 }
 
-void clock_handler(int dev, void *arg) {
-   // TODO: write code for this function
-}
-
 /* check if process is running in kernel mode */
 void check_kernel_mode(void) {
-   // psr_get() returns current processes mode: 1 = kernel mode, 0 = user mode.
-   unsigned int psr = psr_get();
-   if ((psr & PSR_CURRENT_MODE) == 0) {
-      console("fork1(): Not in kernel mode. Halting...\n");
+   /* psr_get() returns current processes mode: 1 = kernel mode, 0 = user mode. */
+   unsigned int current_psr = psr_get();
+   if ((current_psr & PSR_CURRENT_MODE) == 0) {
+      console("Kernel mode expected, but function called in user mode.\n");
       halt(1);
    }
 }
@@ -562,46 +607,46 @@ void check_kernel_mode(void) {
 /* prints process table info to console */
 void dump_processes(void) {
 
-   console("PID\tParent\tPriority  Status\t# Kids\tCPUtime  Name\n"); 
+   console("PID\tParent\t Priority  Status\t # Kids   CPUtime  Name\n"); 
 
    for (int i = 0; i < MAXPROC; i++) {
 
       console("%d\t", proc_tbl[i].pid);
       
       if (proc_tbl[i].parent_proc_ptr == NULL) {
-         console("%d\t", -1);
+         console("%d\t ", -1);
       } else {
-         console("%d\t", proc_tbl[i].parent_proc_ptr->pid);
+         console("%d\t ", proc_tbl[i].parent_proc_ptr->pid);
       }
 
       console("%d\t  ", proc_tbl[i].priority);
 
       switch (proc_tbl[i].status) {
          case 0:
-            console("EMPTY\t\t");
+            console(" EMPTY\t ");
             break;
          case 1:
-            console("RUNNING\t");
+            console(" RUNNING\t ");
             break;
          case 2:
-            console("READY\t\t");
+            console(" READY\t ");
             break;
          case 3:
-            console("QUIT\t\t");
+            console(" QUIT\t ");
             break;
          case 4:
-            console("JOIN BLOCK\t");
+            console(" JOIN BLOCK\t ");
             break;
          case 5:
-            console("ZAP BLOCK\t");
+            console(" ZAP BLOCK\t ");
             break;
          case 6:
-            console("LAST\t");
+            console(" LAST\t ");
             break;
       }
 
-      console("%d\t", proc_tbl[i].children.count);
-      console("%d\t ", proc_tbl[i].runtime);
+      console("%d\t  ", proc_tbl[i].children.count);
+      console("%d\t   ", proc_tbl[i].runtime);
       console("%s\n", proc_tbl[i].name);
    }
 }
@@ -619,15 +664,17 @@ int zap(int pid) {
    proc_ptr proc_to_zap = &proc_tbl[proc_slot];
 
    if (pid == current->pid) {
-      console("Process attemped to zap self. Halting...\n");
+      console("zap: process attempted to zap itself.\n");
       halt(1);
    }
 
-   /*TODO */
-   // block process
-   // call dispatcher
-   // add zapper to zapper list
-   // update quit to wake up zappers / parents
+   /* set zap flag */
+   proc_to_zap->zap_flag = TRUE;
+
+   /* block current status and add to zappers of target */
+   current->status = STATUS_ZAP_BLOCKED;
+   list_add_node(&proc_to_zap->zappers, current);
+   dispatcher();
 
    return 0;
 }
@@ -646,11 +693,15 @@ int block_me(int new_status) {
       halt(1);
    }
 
+   /* returns if calling process was zapped */
+   if (current->zap_flag == TRUE) {
+      return -1;
+   }
+
    current->status = new_status;
    dispatcher();
 
-   return -1; // if processs was zapped while blocked
-   return 0;  // otherwise
+   return 0;
 
 }
 
@@ -664,17 +715,22 @@ int unblock_proc(int pid) {
       || proc_to_unblock->status == STATUS_EMPTY
       || proc_to_unblock->status <= 10) {
 
-         return -2;
-      }
+      return -2;
+   }
+
+   /* returns if calling process was zapped */
+   if (current->zap_flag == TRUE) {
+      return -1;
+   }
    
    add_ready_proc(proc_to_unblock);
    dispatcher();
 
-   return -1;  // if the calling process was zapped
-   return 0 ;  // otherwise
+   return 0 ; 
 }
 
-int get_next_pid(void) { // TEST04 WHY IS 50 RUNNING TWICE??
+/* returns new process ID */
+int get_next_pid(void) { 
 
    int new_pid = -1;
    int proc_slot = next_pid % MAXPROC;
@@ -688,4 +744,34 @@ int get_next_pid(void) { // TEST04 WHY IS 50 RUNNING TWICE??
       new_pid = next_pid++;
    }
    return new_pid;
+}
+
+/* returns the time (in microseconds) at which the currently executing
+process began its current time slice */
+int read_cur_start_time(void) {
+   return current->start_time;
+}
+
+/* calls the dispatcher if the currently executing process has exceeded its time slice */
+void time_slice(void) {
+
+   int curr = sys_clock();
+
+   if (curr - current->start_time > MAXTIME) {
+      add_ready_proc(current);
+      dispatcher();
+   }
+}
+
+/* returns the CPU time (in milliseconds) used by the current process */
+   int readtime(void) {
+
+   // TODO: write code for this function
+   int curr = sys_clock();
+   return curr - current->start_time;
+}
+
+void clock_handler(int dev, void *arg) {
+   // TODO: write code for this function
+   time_slice();
 }
