@@ -68,6 +68,6 @@ union psr_values {
 #define MAXPRIORITY 1
 #define SENTINELPID 1
 #define SENTINELPRIORITY LOWEST_PRIORITY
-#define MAXTIME 80
+#define MAXTIME 80000
 
 

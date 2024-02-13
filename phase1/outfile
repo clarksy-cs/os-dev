@@ -51,7 +51,7 @@ start1(): performing join
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   RUNNING	 1	  0	   start1
+2	-1	 1	   RUNNING	 1	  6	   start1
 3	2	 3	   READY	 0	  0	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   
 -1	-1	 -1	   EMPTY	 0	  -1	   
@@ -173,7 +173,7 @@ start1(): after fork of child 50
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 50	2	 3	   READY	 0	  0	   XXp1
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   RUNNING	 48	  0	   start1
+2	-1	 1	   RUNNING	 48	  15888	   start1
 3	2	 3	   READY	 0	  0	   XXp1
 4	2	 3	   READY	 0	  0	   XXp1
 5	2	 3	   READY	 0	  0	   XXp1
@@ -317,7 +317,6 @@ XXp1(): started, pid = 49
 start1(): after join of child 49, status = -49
 XXp1(): started, pid = 50
 start1(): after join of child 50, status = -50
-start1(): after fork of child 50
 start1(): after fork of child 53
 start1(): after fork of child 54
 start1(): after fork of child 55
@@ -365,10 +364,11 @@ start1(): after fork of child 96
 start1(): after fork of child 97
 start1(): after fork of child 98
 start1(): after fork of child 99
+start1(): after fork of child 100
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
-50	2	 3	   READY	 0	  0	   XXp1
+100	2	 3	   READY	 0	  0	   XXp1
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   RUNNING	 48	  0	   start1
+2	-1	 1	   RUNNING	 48	  170342	   start1
 53	2	 3	   READY	 0	  0	   XXp1
 54	2	 3	   READY	 0	  0	   XXp1
 55	2	 3	   READY	 0	  0	   XXp1
@@ -416,8 +416,6 @@ PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 97	2	 3	   READY	 0	  0	   XXp1
 98	2	 3	   READY	 0	  0	   XXp1
 99	2	 3	   READY	 0	  0	   XXp1
-XXp1(): started, pid = 50
-start1(): after join of child 50, status = -50
 XXp1(): started, pid = 53
 start1(): after join of child 53, status = -53
 XXp1(): started, pid = 54
@@ -512,6 +510,8 @@ XXp1(): started, pid = 98
 start1(): after join of child 98, status = -98
 XXp1(): started, pid = 99
 start1(): after join of child 99, status = -99
+XXp1(): started, pid = 100
+start1(): after join of child 100, status = -100
 All processes completed.
 
 starting test 05 ....
@@ -530,7 +530,7 @@ XXp1(): XXp3, started, pid = 4
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 2	  0	   start1
+2	-1	 1	   JOIN BLOCK	 2	  114	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp2
 4	2	 3	   RUNNING	 0	  0	   XXp3
 5	2	 3	   READY	 0	  0	   XXp4
@@ -596,7 +596,7 @@ XXp1(): XXp3, started, pid = 6
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 2	  0	   start1
+2	-1	 1	   JOIN BLOCK	 2	  811	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp2
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp3
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp2
@@ -718,7 +718,13 @@ SIMULATOR TRAP: privileged instruction (USLOSS halt)
 
 starting test 12 ....
 
-SIMULATOR TRAP: privileged instruction (sys_clock)
+start1(): started
+start1(): after fork of child 3
+start1(): performing join
+XXp1(): started
+XXp1(): arg = `XXp1'
+Kernel mode expected, but function called in user mode.
+SIMULATOR TRAP: privileged instruction (USLOSS halt)
 
 starting test 13 ....
 
@@ -737,8 +743,8 @@ XXp3(): started
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 2	  0	   start1
-3	2	 3	   JOIN BLOCK	 1	  0	   XXp1
+2	-1	 1	   JOIN BLOCK	 2	  24	   start1
+3	2	 3	   JOIN BLOCK	 1	  6	   XXp1
 4	2	 4	   ZAP BLOCK	 0	  0	   XXp2
 5	3	 5	   RUNNING	 0	  0	   XXp3
 -1	-1	 -1	   EMPTY	 0	  -1	   
@@ -809,8 +815,8 @@ XXp3(): started
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 2	  0	   start1
-3	2	 3	   JOIN BLOCK	 1	  0	   XXp1
+2	-1	 1	   JOIN BLOCK	 2	  24	   start1
+3	2	 3	   JOIN BLOCK	 1	  6	   XXp1
 4	2	 4	   ZAP BLOCK	 0	  0	   XXp2
 5	3	 5	   RUNNING	 0	  0	   XXp3
 -1	-1	 -1	   EMPTY	 0	  -1	   
@@ -881,8 +887,8 @@ XXp3(): started
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 2	  0	   start1
-3	2	 3	   ZAP BLOCK	 1	  0	   XXp1
+2	-1	 1	   JOIN BLOCK	 2	  24	   start1
+3	2	 3	   ZAP BLOCK	 1	  6	   XXp1
 4	2	 4	   ZAP BLOCK	 0	  0	   XXp2
 5	3	 5	   RUNNING	 0	  0	   XXp3
 -1	-1	 -1	   EMPTY	 0	  -1	   
@@ -955,8 +961,8 @@ XXp3(): started
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 2	  0	   start1
-3	2	 3	   ZAP BLOCK	 1	  0	   XXp1
+2	-1	 1	   JOIN BLOCK	 2	  24	   start1
+3	2	 3	   ZAP BLOCK	 1	  6	   XXp1
 4	2	 4	   ZAP BLOCK	 0	  0	   XXp2
 5	3	 5	   RUNNING	 0	  0	   XXp3
 -1	-1	 -1	   EMPTY	 0	  -1	   
@@ -1003,7 +1009,7 @@ PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 -1	-1	 -1	   EMPTY	 0	  -1	   
 -1	-1	 -1	   EMPTY	 0	  -1	   
-XXp1(): after zap'ing process with pid_z, status = 0
+XXp1(): after zap'ing process with pid = 5, XXp1 was zapped while blocked on zap
 XXp1(): joining with first child
 XXp1(): was zapped while it was blocked on join
 start1(): exit status for child 3 is -3
@@ -1084,15 +1090,79 @@ starting test 23 ....
 start1(): started
 XXp1(): creating children
 XXp2(): started, pid = 4, calling block_me
-check_deadlock: numProc is 4
-check_deadlock: processes still present, halting...
+XXp2(): started, pid = 5, calling block_me
+XXp2(): started, pid = 6, calling block_me
+PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
+-1	-1	 -1	   EMPTY	 0	  -1	   
+1	-1	 6	   READY	 0	  0	   sentinel
+2	-1	 1	   JOIN BLOCK	 1	  6	   start1
+3	2	 5	   RUNNING	 3	  267	   XXp1
+4	3	 3	   13		 0	  0	   XXp2
+5	3	 3	   13		 0	  0	   XXp2
+6	3	 3	   13		 0	  0	   XXp2
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+-1	-1	 -1	   EMPTY	 0	  -1	   
+XXp1(): unblocking children
+XXp2(): pid = 4, after block_me, result = 0
+XXp2(): pid = 5, after block_me, result = 0
+XXp2(): pid = 6, after block_me, result = 0
+XXp1(): after unblocking 4, result = 0
+XXp1(): after unblocking 5, result = 0
+XXp1(): after unblocking 6, result = 0
+XXp1 done; returning...
+All processes completed.
 
 starting test 24 ....
 
 start1(): started
 XXp1(): creating children
 XXp2(): started, pid = 4, calling block_me
-check_deadlock: numProc is 4
+XXp2(): started, pid = 5, calling block_me
+XXp2(): started, pid = 6, calling block_me
+XXp1(): creating zapper child
+XXp3(): started, pid = 7, calling zap on pid 5
+check_deadlock: numProc is 7
 check_deadlock: processes still present, halting...
 
 starting test 25 ....
@@ -1100,7 +1170,11 @@ starting test 25 ....
 start1(): started
 XXp1(): creating children
 XXp2(): started, pid = 4, calling block_me
-check_deadlock: numProc is 4
+XXp2(): started, pid = 5, calling block_me
+XXp2(): started, pid = 6, calling block_me
+XXp1(): creating zapper children
+XXp3(): started, pid = 7, calling zap on pid 5
+check_deadlock: numProc is 7
 check_deadlock: processes still present, halting...
 
 starting test 26 ....
@@ -1122,7 +1196,7 @@ XXp1(): XXp4, started, pid = 5
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 1	  0	   start1
+2	-1	 1	   JOIN BLOCK	 1	  192	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 5	2	 3	   RUNNING	 0	  0	   XXp1
@@ -1173,7 +1247,7 @@ PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 1	  0	   start1
+2	-1	 1	   JOIN BLOCK	 1	  192	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 5	2	 3	   RUNNING	 0	  0	   XXp1
@@ -1224,7 +1298,7 @@ PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 1	  0	   start1
+2	-1	 1	   JOIN BLOCK	 1	  192	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 5	2	 3	   RUNNING	 0	  0	   XXp1
@@ -1290,7 +1364,7 @@ XXp1(): XXp4, started, pid = 7
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 1	  0	   start1
+2	-1	 1	   JOIN BLOCK	 1	  993	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
@@ -1341,7 +1415,7 @@ PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 1	  0	   start1
+2	-1	 1	   JOIN BLOCK	 1	  993	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
@@ -1392,7 +1466,7 @@ PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 PID	Parent	 Priority  Status	 # Kids   CPUtime  Name
 -1	-1	 -1	   EMPTY	 0	  -1	   
 1	-1	 6	   READY	 0	  0	   sentinel
-2	-1	 1	   JOIN BLOCK	 1	  0	   start1
+2	-1	 1	   JOIN BLOCK	 1	  993	   start1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
 -1	-1	 -1	   EMPTY	 0	  -1	   XXp1
@@ -1509,7 +1583,7 @@ XXp3(): started
 XXp3(): arg = `XXp3'
 XXp3(): after fork of child 6
 XXp3(): performing first join
-XXp3(): exit status for child -1 is 0
+XXp3(): exit status for child -1 is -3
 quit(): Process with active children attempting to quit
 
 starting test 30 ....
@@ -1527,7 +1601,7 @@ XXp2(): arg = `XXp2'
 XXp2(): calling zap(3)
 XXp3(): started
 XXp3(): arg = `XXp3FromXXp1'
-XXp1(): exit status for child -1 is 0
+XXp1(): exit status for child -1 is -3
 XXp1():at this point is_zapped() returns: 1
 start1(): exit status for child 3 is -1
 start1(): performing second join
@@ -1571,10 +1645,7 @@ start1(): performing first join
 XXp1(): started
 XXp1(): arg = `XXp1'
 XXp1(): zapping a non existant processes pid, should cause abort, calling zap(204)
-XXp1(): started
-XXp1(): arg = `XXp1'
-XXp1(): zapping a non existant processes pid, should cause abort, calling zap(204)
-zap: process attempted to zap itself.
+zap: attempting to zap a process that does not exist.
 
 starting test 35 ....
 

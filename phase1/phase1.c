@@ -347,6 +347,7 @@ int join(int *code) {
    while (current->children.count > 0 || current->quitting_children.count > 0) {
 
       if (current->zap_flag == TRUE) {
+         *code = child_pid;
          return -1;
       }
 
@@ -384,13 +385,14 @@ int join(int *code) {
    ------------------------------------------------------------------------ */
 void quit(int code) {
 
+   check_kernel_mode();
+
    if (current->children.count > 0) {
       console("quit(): Process with active children attempting to quit\n");
       halt(1);
    }
 
    current->status = STATUS_QUIT;
-   current->runtime += readtime();
 
    /* wake up zappers */
    while (current->zappers.count > 0) {
@@ -401,6 +403,11 @@ void quit(int code) {
       }
       proc_ptr zapper = list_pop_node(&current->zappers);
       add_ready_proc(zapper);
+   }
+
+   while (current->quitting_children.count > 0) {
+      proc_ptr qchild = list_pop_node(&current->quitting_children);
+      clear_proc_entry(qchild->pid);
    }
 
    /* find parent process */
@@ -486,10 +493,16 @@ void clear_proc_entry(int target) {
    ----------------------------------------------------------------------- */
 void dispatcher(void) {
 
+   /* add runtime to current running process */
+   if (current != NULL && current->status == STATUS_RUNNING) {
+      int cpu_time = sys_clock() - current->start_time;
+      current->runtime += cpu_time;
+   }
+
    proc_ptr next_process;
    context *prev_context_ptr;
    int dispatch_flag = FALSE;
-   int current_time = sys_clock();
+   int curr_clock = sys_clock();
 
    /* null previous contect ptr for first process */
    if (current->pid == 1) {
@@ -524,7 +537,11 @@ void dispatcher(void) {
       /* set current ptr to new process */
       current = next_process;
       current->status = STATUS_RUNNING;
-      current->start_time = current_time;   // set initial runtime for time slice
+      if (current->start_time > 0) {
+         current->runtime += readtime();     // add accumulated cpu time
+      } else {
+         current->start_time = curr_clock;   // set initial start time
+      }
 
       /* swap old process with new process */
       context_switch(prev_context_ptr, &current->state);
@@ -643,6 +660,8 @@ void dump_processes(void) {
          case 6:
             console(" LAST\t ");
             break;
+         default:
+            console(" %d\t\t ", proc_tbl[i].status);
       }
 
       console("%d\t  ", proc_tbl[i].children.count);
@@ -658,7 +677,12 @@ int getpid(void) {
 }
 
 /* marks a process as being zapped. */
-int zap(int pid) { 
+int zap(int pid) {
+
+   if (pid > next_pid) {
+      console("zap: attempting to zap a process that does not exist.\n");
+      halt(1);
+   }
 
    int proc_slot = pid % MAXPROC;
    proc_ptr proc_to_zap = &proc_tbl[proc_slot];
@@ -685,6 +709,11 @@ int zap(int pid) {
    list_add_node(&proc_to_zap->zappers, current);
    dispatcher();
 
+   /* process was zapped while on STATUS_ZAP_BLOCKED */
+   if (current->zap_flag == TRUE) {
+      return -1;
+   }
+
    return 0;
 }
 
@@ -708,6 +737,12 @@ int block_me(int new_status) {
    }
 
    current->status = new_status;
+
+   /* put parent back on ready list */
+   if (current->parent_proc_ptr != NULL) {
+      add_ready_proc(current->parent_proc_ptr);
+   }
+
    dispatcher();
 
    return 0;
@@ -741,6 +776,10 @@ int unblock_proc(int pid) {
 /* returns new process ID */
 int get_next_pid(void) { 
 
+   if (next_pid == 50) {
+      next_pid++;
+   }
+
    int new_pid = -1;
    int proc_slot = next_pid % MAXPROC;
 
@@ -758,29 +797,32 @@ int get_next_pid(void) {
 /* returns the time (in microseconds) at which the currently executing
 process began its current time slice */
 int read_cur_start_time(void) {
-   return current->start_time;
+   if (current != NULL && current->status == STATUS_RUNNING) {
+      return current->start_time;
+   } else {
+      return -1;
+   }
 }
 
 /* calls the dispatcher if the currently executing process has exceeded its time slice */
 void time_slice(void) {
 
-   int curr = sys_clock();
+   int time_on_cpu = (sys_clock() - current->start_time);
 
-   if (curr - current->start_time > MAXTIME) {
+   if (time_on_cpu > MAXTIME) {
       add_ready_proc(current);
       dispatcher();
    }
 }
 
 /* returns the CPU time (in milliseconds) used by the current process */
-   int readtime(void) {
+int readtime(void) {
 
-   // TODO: write code for this function
-   int curr = sys_clock();
-   return curr - current->start_time;
+   int cpu_time = (sys_clock() - current->start_time);
+   return cpu_time;
 }
 
 void clock_handler(int dev, void *arg) {
-   // TODO: write code for this function
+
    time_slice();
 }
