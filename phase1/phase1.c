@@ -87,6 +87,7 @@ void startup(void) {
       proc_tbl[i].exit_code = 0;
       proc_tbl[i].start_time = -1;
       proc_tbl[i].runtime = -1;
+      proc_tbl[i].init_time = -1;
       proc_tbl[i].zap_flag = FALSE;
 
       proc_tbl[i].children.p_head = NULL;
@@ -223,6 +224,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    new_proc->priority = priority;
    new_proc->status = STATUS_READY;
    new_proc->runtime = 0;
+   new_proc->init_time = sys_clock();
 
    num_proc++;
 
@@ -365,6 +367,7 @@ int join(int *code) {
 
       // no child process has quit, block the parent
       current->status = STATUS_JOIN_BLOCKED;
+      current->runtime += sys_clock() - current->start_time;
       list_pop_node(&ready_procs[current->priority - 1]);
       dispatcher();
    }
@@ -386,6 +389,8 @@ int join(int *code) {
 void quit(int code) {
 
    check_kernel_mode();
+   p1_quit(current->pid);
+   enableInterrupts();
 
    if (current->children.count > 0) {
       console("quit(): Process with active children attempting to quit\n");
@@ -427,8 +432,6 @@ void quit(int code) {
    }
 
    dispatcher();
-   p1_quit(current->pid);
-   enableInterrupts();
 
 } /* quit */
 
@@ -470,6 +473,7 @@ void clear_proc_entry(int target) {
    proc_tbl[target].exit_code = 0;
    proc_tbl[target].start_time = -1;
    proc_tbl[target].runtime = -1;
+   proc_tbl[target].init_time = -1;
    proc_tbl[target].zap_flag = FALSE;
    proc_tbl[target].children.p_head = NULL;
    proc_tbl[target].children.p_tail = NULL;
@@ -493,16 +497,9 @@ void clear_proc_entry(int target) {
    ----------------------------------------------------------------------- */
 void dispatcher(void) {
 
-   /* add runtime to current running process */
-   if (current != NULL && current->status == STATUS_RUNNING) {
-      int cpu_time = sys_clock() - current->start_time;
-      current->runtime += cpu_time;
-   }
-
    proc_ptr next_process;
    context *prev_context_ptr;
    int dispatch_flag = FALSE;
-   int curr_clock = sys_clock();
 
    /* null previous contect ptr for first process */
    if (current->pid == 1) {
@@ -517,6 +514,7 @@ void dispatcher(void) {
          if (ready_procs[i].count > 0) {
             dispatch_flag = TRUE;
             current->status = STATUS_JOIN_BLOCKED;
+            current->runtime += sys_clock() - current->start_time;
             list_pop_node(&ready_procs[current->priority - 1]);
             break;
          }
@@ -537,11 +535,7 @@ void dispatcher(void) {
       /* set current ptr to new process */
       current = next_process;
       current->status = STATUS_RUNNING;
-      if (current->start_time > 0) {
-         current->runtime += readtime();     // add accumulated cpu time
-      } else {
-         current->start_time = curr_clock;   // set initial start time
-      }
+      current->start_time = sys_clock();
 
       /* swap old process with new process */
       context_switch(prev_context_ptr, &current->state);
@@ -624,49 +618,62 @@ void check_kernel_mode(void) {
 /* prints process table info to console */
 void dump_processes(void) {
 
-   console("PID\tParent\t Priority  Status\t # Kids   CPUtime  Name\n"); 
+   console("%-7s %-8s %-9s %-13s %-8s %-8s %-8s\n",
+            "PID",
+            "Parent",
+            "Priority",
+            "Status",
+            "# Kids",
+            "CPUtime",
+            "Name"); 
 
    for (int i = 0; i < MAXPROC; i++) {
 
-      console("%d\t", proc_tbl[i].pid);
-      
-      if (proc_tbl[i].parent_proc_ptr == NULL) {
-         console("%d\t ", -1);
-      } else {
-         console("%d\t ", proc_tbl[i].parent_proc_ptr->pid);
+      /* update time of running process */
+      if (proc_tbl[i].status == STATUS_RUNNING) {
+         int cpu_time = sys_clock() - current->start_time;
+         proc_tbl[i].runtime += cpu_time;
       }
 
-      console("%d\t  ", proc_tbl[i].priority);
+      console("%-7d ", proc_tbl[i].pid);
+      
+      if (proc_tbl[i].parent_proc_ptr == NULL) {
+         console("%-8d ", -1);
+      } else {
+         console("%-8d ", proc_tbl[i].parent_proc_ptr->pid);
+      }
+
+      console("%-9d ", proc_tbl[i].priority);
 
       switch (proc_tbl[i].status) {
          case 0:
-            console(" EMPTY\t ");
+            console("%-13s ", "EMPTY");
             break;
          case 1:
-            console(" RUNNING\t ");
+            console("%-13s ", "RUNNING");
             break;
          case 2:
-            console(" READY\t ");
+            console("%-13s ", "READY");
             break;
          case 3:
-            console(" QUIT\t ");
+            console("%-13s ", "QUIT");
             break;
          case 4:
-            console(" JOIN BLOCK\t ");
+            console("%-13s ", "JOIN BLOCK");
             break;
          case 5:
-            console(" ZAP BLOCK\t ");
+            console("%-13s ", "ZAP BLOCK");
             break;
          case 6:
-            console(" LAST\t ");
+            console("%-13s ", "LAST");
             break;
          default:
-            console(" %d\t\t ", proc_tbl[i].status);
+            console("%-13d ", proc_tbl[i].status);
       }
 
-      console("%d\t  ", proc_tbl[i].children.count);
-      console("%d\t   ", proc_tbl[i].runtime);
-      console("%s\n", proc_tbl[i].name);
+      console("%-8d ", proc_tbl[i].children.count);
+      console("%-8d ", proc_tbl[i].runtime);
+      console("%-8s\n", proc_tbl[i].name);
    }
 }
 
@@ -706,6 +713,7 @@ int zap(int pid) {
 
    /* block current status and add to zappers of target */
    current->status = STATUS_ZAP_BLOCKED;
+   current->runtime += sys_clock() - current->start_time;
    list_add_node(&proc_to_zap->zappers, current);
    dispatcher();
 
@@ -737,6 +745,7 @@ int block_me(int new_status) {
    }
 
    current->status = new_status;
+   current->runtime += sys_clock() - current->start_time;
 
    /* put parent back on ready list */
    if (current->parent_proc_ptr != NULL) {
@@ -797,6 +806,7 @@ int get_next_pid(void) {
 /* returns the time (in microseconds) at which the currently executing
 process began its current time slice */
 int read_cur_start_time(void) {
+
    if (current != NULL && current->status == STATUS_RUNNING) {
       return current->start_time;
    } else {
@@ -807,7 +817,7 @@ int read_cur_start_time(void) {
 /* calls the dispatcher if the currently executing process has exceeded its time slice */
 void time_slice(void) {
 
-   int time_on_cpu = (sys_clock() - current->start_time);
+   int time_on_cpu = sys_clock() - current->start_time;
 
    if (time_on_cpu > MAXTIME) {
       add_ready_proc(current);
@@ -818,7 +828,8 @@ void time_slice(void) {
 /* returns the CPU time (in milliseconds) used by the current process */
 int readtime(void) {
 
-   int cpu_time = (sys_clock() - current->start_time);
+   int cpu_time = sys_clock() - current->start_time;
+   cpu_time += current->runtime;
    return cpu_time;
 }
 

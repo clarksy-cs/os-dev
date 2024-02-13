@@ -46,6 +46,7 @@ struct proc_struct {
    int            exit_code;
    int            start_time;
    int            runtime;
+   int            init_time;
    int            zap_flag;
 };
 
