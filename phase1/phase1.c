@@ -344,12 +344,15 @@ void launch(void)
 int join(int *code) {
 
    proc_ptr child = NULL;
-   int child_pid = -3;
+   int child_pid;
 
    while (current->children.count > 0 || current->quitting_children.count > 0) {
 
       if (current->zap_flag == TRUE) {
-         *code = child_pid;
+         child = current->quitting_children.p_head;
+         if (child != NULL) {
+            *code = child->exit_code;
+         }
          return -1;
       }
 
@@ -419,7 +422,9 @@ void quit(int code) {
    if (current->parent_proc_ptr != NULL) {
       /*remove from children list and add to quit children list*/
       proc_ptr child = list_pop_node(&current->parent_proc_ptr->children);
-      child->exit_code = code;
+      if (child != NULL) {
+         child->exit_code = code; // TESTCASE 28 LOSES XXP2
+      }
       list_add_node(&current->parent_proc_ptr->quitting_children, child);
    }
 
@@ -571,11 +576,6 @@ int sentinel (char *dummy) {
 /* check to determine if deadlock has occurred... */
 static void check_deadlock(void) {
 
-   /* TODO: *********************
-   if (check_io() == 1) {
-      return;
-   } */
-
    /* sentinel is the only active process */
    if (num_proc == 1) {
       console("All processes completed.\n");
@@ -715,6 +715,12 @@ int zap(int pid) {
    current->status = STATUS_ZAP_BLOCKED;
    current->runtime += sys_clock() - current->start_time;
    list_add_node(&proc_to_zap->zappers, current);
+
+   /* put parent back on ready list */
+   if (current->parent_proc_ptr != NULL && current->parent_proc_ptr->zap_flag == FALSE) {
+      add_ready_proc(current->parent_proc_ptr);
+   }
+
    dispatcher();
 
    /* process was zapped while on STATUS_ZAP_BLOCKED */
@@ -753,6 +759,11 @@ int block_me(int new_status) {
    }
 
    dispatcher();
+
+   /* process was zapped while on block_me() */
+   if (current->zap_flag == TRUE) {
+      return -1;
+   }
 
    return 0;
 
