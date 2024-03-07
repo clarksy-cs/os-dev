@@ -160,7 +160,7 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 int check_io(){
     // ordered based on order of mailbox creation
     //Implement mailbox to use these variables
-    //for (int i = clockMBox; i<= termMbox[3]; i ++){
+    for (int i = clockMbox; i<= termMBox[3]; i ++){
       //if (MailBoxTable[i].waitingForDelivery.coint > 0) {
          //return 1;
       }
