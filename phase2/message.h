@@ -4,13 +4,30 @@
 #define MBSTATUS_RUNNING   1
 
 typedef struct mailslot *slot_ptr;
-typedef struct mbox_proc *mbox_proc_ptr;
 typedef struct mailbox *mbox_ptr;
+typedef struct waitingproc waitingproc;
+typedef struct waitingproc *wproc_ptr;
+
+typedef struct Node {
+   struct Node *next;
+} Node;
+
+typedef struct List {
+   Node     *p_head;
+   Node     *p_tail;
+   int      count;
+} List;
 
 typedef struct mailbox {
    int      mbox_id;
    int      status;
-   /* other items as needed... */
+   int      slot_size;
+   int      slot_count;
+   List     delivered_mail;
+   List     waiting_send;
+   List     waiting_rcv;
+   List     released_procs;
+   int      releasing_pid;
 } mbox;
 
 typedef struct mailslot {
@@ -19,12 +36,11 @@ typedef struct mailslot {
    /* other items as needed... */
 } mslot;
 
-typedef struct {
-   slot_ptr p_head;
-   slot_ptr p_tail;
-   int count;
-   int offset;
-} List;
+struct waitingproc {
+   wproc_ptr   next_proc_ptr;
+   wproc_ptr   prev_proc_ptr;
+   int         pid;
+};
 
 struct psr_bits {
     unsigned int cur_mode:1;

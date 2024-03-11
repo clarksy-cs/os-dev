@@ -15,8 +15,9 @@
 /* ------------------------- Prototypes ----------------------------------- */
 int start1 (char *);
 extern int start2 (char *);
-int  GetNextEmptyMailbox(void);
+extern void (*sys_vec[])(sysargs *args);
 static void nullsys(sysargs *args);
+int  GetNextEmptyMailbox(void);
 void clock_handler2(int dev, void *arg);
 void disk_handler(int dev, void *unit_ptr);
 void term_handler(int dev, void *unit_ptr);
@@ -24,9 +25,18 @@ void syscall_handler(int dev, void *unit_ptr);
 int  waitdevice(int type, int unit, int *status);
 int  send_message(int mbox_id, void *msg_ptr, int msg_size, int wait); 
 int  receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait);
+
+
+// adjust these
+void disableInterrupts();
+void enableInterrupts();
+void check_kernel_mode(char *str);
 /* -------------------------- Globals ------------------------------------- */
 
 int debugflag2 = 0;
+
+/* system call array of function pointers */
+void (*sys_vec[MAXSYSCALLS])(sysargs *args);
 
 /* the mailboxes */
 mbox  mbox_tbl[MAXMBOX];
@@ -65,17 +75,17 @@ int start1(char *arg) {
    if (DEBUG2 && debugflag2)
       console("start1(): at beginning\n");
 
-   // check_kernel_mode("start1");
+   check_kernel_mode("start1");
 
-   // disableInterrupts();
+   disableInterrupts();
 
    /* intialize interrupt handlers */
-   // int_vec[CLOCK_DEV] = clock_handler2;
-   // int_vec[SYSCALL_INT] = syscall_handler;
+   int_vec[CLOCK_DEV]   = clock_handler2;
+   int_vec[DISK_DEV]    = disk_handler;
+   int_vec[TERM_DEV]    = term_handler;
+   int_vec[SYSCALL_INT] = syscall_handler;
 
-   /* system call array of function pointers */
-   void (*sys_vec[MAXSYSCALLS])(sysargs *args);
-
+   /* set all system call handlers to nullsys */
    for (int i = 0; i < MAXSYSCALLS; i++) {
       sys_vec[i] = nullsys;
    }
@@ -84,7 +94,12 @@ int start1(char *arg) {
    for (int i = 0; i < MAXMBOX; i++) {
       mbox_tbl[i].mbox_id = -1;
       mbox_tbl[i].status  = MBSTATUS_EMPTY;
+      mbox_tbl[i].slot_count = -1;
+      mbox_tbl[i].slot_size = -1;
    }
+
+   /* initialize waiting process table */
+   waitingproc waiting_procs[MAXPROC];
 
    /* allocate mailboxes for interrupt handlers */
    clock_mbox = MboxCreate(0, sizeof(int));
@@ -106,11 +121,11 @@ int start1(char *arg) {
       term_mbox[2] <= -1 ||
       term_mbox[3] <= -1  ) 
    {
-      console("start1: Error creating mailbox\n");
+      console("start1(): Unable to create one or more mailboxes. Halting...\n");
       halt(1);
    }
    
-   //enableInterrupts();
+   enableInterrupts();
 
    /* Create a process for start2, then block on a join until start2 quits */
    if (DEBUG2 && debugflag2)
@@ -245,9 +260,21 @@ int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
    ----------------------------------------------------------------------- */
 int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
-   // code
+   int result = 0;
+   slot_ptr slot = NULL;
+   mbox *p_mailbox;
+   // waiting_process *p_waitingproc;
 
-} /* rcv_message */
+   disableInterrupts();
+
+   //p_mailbox = get_mailbox(mbox_id);
+
+   if (p_mailbox == NULL) {
+      console("The mailbox id is invalid.\n");
+      return -1;
+   }
+
+} /* receive_message */
 
 
 /* ------------------------------------------------------------------------
@@ -380,26 +407,26 @@ void term_handler(int dev, void *unit_ptr) {
 
 } /* term_handler */
 
-// void syscall_handler(int dev, void *unit_ptr) {
-// 
-//    sysargs *sys_ptr;
-//    sys_ptr = (sysargs *) unit_ptr;
-// 
-//    /* sanity check */
-//    if (dev != SYSCALL_INT) {
-//       console("syscall_handler(): device out of range. Halting...\n");
-//       halt(1);
-//    }
-// 
-//    if (sys_ptr->number < 0 || sys_ptr->number > MAXSYSCALLS) {
-//       console("syscall_handler(): system call number out of range. Halting...\n");
-//       halt(1);
-//    }
-// 
-//    /* call appropriate system call handler */
-//    sys_vec[sys_ptr->number](sys_ptr);
-// 
-// } /* syscall_handler */
+void syscall_handler(int dev, void *unit_ptr) {
+
+   sysargs *sys_ptr;
+   sys_ptr = (sysargs *) unit_ptr;
+
+   /* sanity check */
+   if (dev != SYSCALL_INT) {
+      console("syscall_handler(): device out of range. Halting...\n");
+      halt(1);
+   }
+
+   if (sys_ptr->number < 0 || sys_ptr->number >= MAXSYSCALLS) {
+      console("syscall_handler(): sys number 50 is wrong. Halting...\n");
+      halt(1);
+   }
+
+   /* call appropriate system call handler */
+   sys_vec[sys_ptr->number](sys_ptr);
+
+} /* syscall_handler */
 
 static void nullsys(sysargs *args) {
 
@@ -408,10 +435,27 @@ static void nullsys(sysargs *args) {
 } /* nullsys */
 
 int check_io() {
-   /*
-   if (wait_list->count > 0) {
-      return 1;
+
+   /* for any active mailbox, check if a process is waiting on delivery */
+   for (int i = 0; i < MAXMBOX; i++) {
+      if (mbox_tbl[i].status != MBSTATUS_EMPTY) {
+         if (mbox_tbl[i].waiting_rcv.count > 0) {
+            return -1;
+         }
+      }
    }
-   */
+
    return 0; 
+}
+
+void disableInterrupts() {
+
+}
+
+void enableInterrupts() {
+
+}
+
+void check_kernel_mode(char *str) {
+
 }
