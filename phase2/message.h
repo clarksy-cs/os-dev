@@ -3,42 +3,53 @@
 #define MBSTATUS_EMPTY     0
 #define MBSTATUS_RUNNING   1
 
+#define STATUS_FREE        0
+#define STATUS_USED        1
+
+typedef struct mailslot mailslot;
 typedef struct mailslot *slot_ptr;
+
+typedef struct mailbox mailbox;
 typedef struct mailbox *mbox_ptr;
+
 typedef struct waitingproc waitingproc;
-typedef struct waitingproc *wproc_ptr;
+typedef struct waitingproc *proc_ptr;
 
 typedef struct Node {
    struct Node *next;
 } Node;
 
 typedef struct List {
-   Node     *p_head;
-   Node     *p_tail;
+   slot_ptr p_head;
+   slot_ptr p_tail;
    int      count;
 } List;
 
-typedef struct mailbox {
+struct mailbox {
    int      mbox_id;
    int      status;
    int      slot_size;
    int      slot_count;
+   List     slots;
    List     delivered_mail;
    List     waiting_send;
    List     waiting_rcv;
    List     released_procs;
    int      releasing_pid;
-} mbox;
+};
 
-typedef struct mailslot {
-   int      mbox_id;
+struct mailslot {
+   int      slot_id;
    int      status;
-   /* other items as needed... */
-} mslot;
+   int      size;
+   char     buffer[MAX_MESSAGE];
+   slot_ptr next;
+   slot_ptr prev;
+};
 
 struct waitingproc {
-   wproc_ptr   next_proc_ptr;
-   wproc_ptr   prev_proc_ptr;
+   proc_ptr   next_proc_ptr;
+   proc_ptr   prev_proc_ptr;
    int         pid;
 };
 

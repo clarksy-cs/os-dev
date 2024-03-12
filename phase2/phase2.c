@@ -7,6 +7,7 @@
 
    ------------------------------------------------------------------------ */
 #include <stdlib.h>
+#include <string.h>
 #include <phase1.h>
 #include <phase2.h>
 #include <usloss.h>
@@ -26,6 +27,9 @@ int  waitdevice(int type, int unit, int *status);
 int  send_message(int mbox_id, void *msg_ptr, int msg_size, int wait); 
 int  receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait);
 
+void list_add_node(List *mbox_slots, slot_ptr new_node);
+slot_ptr list_pop_node(List *mbox_slots);
+
 
 // adjust these
 void disableInterrupts();
@@ -38,11 +42,14 @@ int debugflag2 = 0;
 /* system call array of function pointers */
 void (*sys_vec[MAXSYSCALLS])(sysargs *args);
 
-/* the mailboxes */
-mbox  mbox_tbl[MAXMBOX];
-mslot mbox_slots[MAXSLOTS];
+/* the mailbox table */
+mailbox mbox_tbl[MAXMBOX];
 
-static List unused_slots;
+/* slot lists */
+List slot_tbl[MAXMBOX];
+
+/* global active slot count */
+int active_slots = 0;
 
 static int clock_mbox;
 static int disk_mbox[2];
@@ -96,6 +103,13 @@ int start1(char *arg) {
       mbox_tbl[i].status  = MBSTATUS_EMPTY;
       mbox_tbl[i].slot_count = -1;
       mbox_tbl[i].slot_size = -1;
+   }
+
+   /* initialize slot lists */
+   for (int i = 0; i <= MAXMBOX; i++) {
+      slot_tbl[i].p_head = NULL;
+      slot_tbl[i].p_tail = NULL;
+      slot_tbl[i].count = 0;
    }
 
    /* initialize waiting process table */
@@ -152,6 +166,14 @@ int start1(char *arg) {
    ----------------------------------------------------------------------- */
 int MboxCreate(int slots, int slot_size) {
 
+   /* return -1 if slot parameters are out of bounds */
+   if (slots > MAXSLOTS ||
+       slots < 0 || 
+       slot_size > MAX_MESSAGE ||
+       slot_size < 0) {
+      return -1;
+   }
+
    int mbox_pos;
 
    /* get next mbox id */
@@ -171,6 +193,8 @@ int MboxCreate(int slots, int slot_size) {
    /* initialize new mailbox */
    new_mbox->mbox_id = next_mbox_id;
    new_mbox->status  = MBSTATUS_RUNNING;
+   new_mbox->slot_count = slots;
+   new_mbox->slot_size = slot_size;
 
    return new_mbox->mbox_id;
 
@@ -187,7 +211,7 @@ int MboxCreate(int slots, int slot_size) {
    ----------------------------------------------------------------------- */
 int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
 
-   // check_kernel_mode("waitdevice");
+   check_kernel_mode("waitdevice");
    return send_message(mbox_id, msg_ptr, msg_size, 1);
 
 } /* MboxSend */
@@ -202,7 +226,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
    ----------------------------------------------------------------------- */
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 
-   // check_kernel_mode("waitdevice");
+   check_kernel_mode("waitdevice");
    return send_message(mbox_id, msg_ptr, msg_size, 0);
 
 } /* MboxCondSend */
@@ -213,9 +237,53 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
    Returns - 
    Side Effects - 
    ----------------------------------------------------------------------- */
-int  send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
+int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
-   // code
+   int result = 0;
+   slot_ptr slot;
+   mbox_ptr mbox;
+   proc_ptr proc;
+
+   disableInterrupts();
+
+   mbox = &mbox_tbl[mbox_id];
+
+   if (mbox == NULL) {
+      console("send_message(): mailbox is invalid.\n");
+      enableInterrupts();
+      return -1;
+   }
+
+   if (mbox->slots.count == mbox->slot_count) {
+      // mailbox slots have reached capacity
+      return -2;
+   }
+
+   if (active_slots == MAXSLOTS) {
+      // active slots have reached capacity
+      return -2;
+   }
+/*
+   if (msg_ptr == NULL) {
+      console("send_message(): message is NULL\n");
+      enableInterrupts();
+      return -1;
+   }
+*/
+   if (msg_size > mbox->slot_size) {
+      return -1; // message size exceeds slot size
+   }
+
+   slot = malloc(sizeof(mailslot));
+   list_add_node(&mbox->slots, slot);
+
+   memcpy(slot->buffer, msg_ptr, msg_size);
+   slot->slot_id = mbox_id;
+   slot->size = msg_size;
+   slot->status = STATUS_USED;
+
+   enableInterrupts();
+   return result;
 
 } /* send_message */
 
@@ -230,7 +298,7 @@ int  send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    ----------------------------------------------------------------------- */
 int MboxReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
 
-   // check_kernel_mode("MboxReceive");
+   check_kernel_mode("MboxReceive");
    return receive_message(mbox_id, msg_ptr, msg_max_size, 1);
 
 } /* MboxReceive */
@@ -246,7 +314,7 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
    ----------------------------------------------------------------------- */
 int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
 
-   // check_kernel_mode("MboxCondReceive");
+   check_kernel_mode("MboxCondReceive");
    return receive_message(mbox_id, msg_ptr, msg_max_size, 0);
 
 } /* MboxCondReceive */
@@ -261,18 +329,35 @@ int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
 int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    int result = 0;
-   slot_ptr slot = NULL;
-   mbox *p_mailbox;
-   // waiting_process *p_waitingproc;
+   slot_ptr slot = malloc(sizeof(mailslot));
+   mbox_ptr mbox;
+   proc_ptr proc;
+   char buffer[msg_size];
 
    disableInterrupts();
 
-   //p_mailbox = get_mailbox(mbox_id);
+   mbox = &mbox_tbl[mbox_id];
 
-   if (p_mailbox == NULL) {
-      console("The mailbox id is invalid.\n");
+   if (mbox == NULL) {
+      console("send_message(): mailbox is invalid.\n");
       return -1;
    }
+
+   if (mbox->slots.count > 0) {
+      slot = list_pop_node(&mbox->slots);
+   }
+
+   if (msg_size >= slot->size) {
+      memcpy(msg_ptr, slot->buffer, slot->size);
+      result = slot->size;
+      free(slot);
+   } else {
+      // message size exceeds buffer size\n");
+      result = -1;
+   }
+
+   enableInterrupts();
+   return result;
 
 } /* receive_message */
 
@@ -286,7 +371,6 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    Side Effects - none.
    ----------------------------------------------------------------------- */
 int MboxRelease(int mbox_id) {
-
 
 } /* MboxRelease */
 
@@ -448,14 +532,59 @@ int check_io() {
    return 0; 
 }
 
-void disableInterrupts() {
+void list_add_node(List *mbox_slots, slot_ptr new_node) {
 
+   if (mbox_slots->p_head == NULL) {
+      /* list is empty */
+      mbox_slots->p_head = new_node;
+      mbox_slots->p_tail = new_node;
+   } else if (mbox_slots->p_head->next == NULL) {
+      /* list has only 1 node -- add to end */
+      mbox_slots->p_head->next = new_node;
+      new_node->prev = mbox_slots->p_head;
+      mbox_slots->p_tail = new_node;
+   } else {
+      /* list has more than 1 node -- add to end */
+      mbox_slots->p_tail->next = new_node;
+      new_node->prev = mbox_slots->p_tail;
+      mbox_slots->p_tail = new_node;
+   }
+
+   mbox_slots->count++;
+   active_slots++;
 }
 
-void enableInterrupts() {
+slot_ptr list_pop_node(List *mbox_slots) {
 
+   slot_ptr rm_node = mbox_slots->p_head;
+
+   if (mbox_slots->p_head == mbox_slots->p_tail) {
+      mbox_slots->p_head = NULL;
+      mbox_slots->p_tail = NULL;
+   } else {
+      mbox_slots->p_head = mbox_slots->p_head->next;
+      mbox_slots->p_head->prev = NULL;
+   }
+
+   mbox_slots->count--;
+   active_slots--;
+
+   if (mbox_slots->count < 0) {
+      mbox_slots->count = 0;
+   }
+
+   return rm_node;
 }
 
+void disableInterrupts() {}
+void enableInterrupts() {}
+
+/* check if process is running in kernel mode */
 void check_kernel_mode(char *str) {
-
+   /* psr_get() returns current processes mode: 1 = kernel mode, 0 = user mode. */
+   unsigned int current_psr = psr_get();
+   if ((current_psr & PSR_CURRENT_MODE) == 0) {
+      console("Kernel mode expected, but function %s called in user mode.\n", str);
+      halt(1);
+   }
 }
