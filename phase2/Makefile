@@ -32,5 +32,3 @@ clean:
 
 phase2.o:	message.h
 	$(CC) $(CFLAGS) -c phase2.c
-
-

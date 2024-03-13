@@ -107,13 +107,6 @@ int start1(char *arg) {
       mbox_tbl[i].slot_size = -1;
    }
 
-   /* initialize slot lists */
-   for (int i = 0; i <= MAXMBOX; i++) {
-      slot_tbl[i].head = NULL;
-      slot_tbl[i].tail = NULL;
-      slot_tbl[i].count = 0;
-   }
-
    /* initialize waiting process table */
    waitingproc waiting_procs[MAXPROC];
 
@@ -197,6 +190,8 @@ int MboxCreate(int slots, int slot_size) {
    new_mbox->status  = MBSTATUS_RUNNING;
    new_mbox->slot_count = slots;
    new_mbox->slot_size = slot_size;
+   new_mbox->slots.count = 0;
+   new_mbox->slots.head = new_mbox->slots.tail = NULL;
    new_mbox->waiting_rcv.head = new_mbox->waiting_rcv.tail = NULL;
    new_mbox->waiting_send.head = new_mbox->waiting_send.tail = NULL;
    new_mbox->waiting_send.count = new_mbox->waiting_rcv.count = 0;
@@ -245,7 +240,6 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    int result = 0;
-   int pid = getpid();
    slot_ptr slot;
    mbox_ptr mbox;
    proc_ptr proc;
@@ -260,37 +254,54 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       return -1;
    }
 
+   /* mbox slots are full */
    if (mbox->slots.count == mbox->slot_count) {
-      // mailbox slots have reached capacity
+
+      proc = malloc(sizeof(waitingproc));
+      proc->next = NULL;
+      proc->prev = NULL;
+      proc->pid  = getpid();
+      proc->slot = NULL;
+
+      if (mbox->slot_count == 0) {
+         
+         slot = malloc(sizeof(mailslot));
+         active_slots++;
+
+         memcpy(slot->buffer, msg_ptr, msg_size);
+         slot->slot_id = mbox_id;
+         slot->size = msg_size;
+         slot->status = STATUS_USED;
+         proc->slot = slot;
+      }
+
+      list_add_node(&mbox->waiting_send, proc);
       block_me(BLOCKED_SEND);
       enableInterrupts();
-      return -2;
+      return result;
    }
 
+   /* total slots at capacity */
    if (active_slots == MAXSLOTS) {
-      // active slots have reached capacity
       enableInterrupts();
       return -2;
    }
 
-   if (mbox->slots.count > 0 && mbox->waiting_rcv.count > 0) {
-      unblock_proc(pid);
-   }
-
+   /* message size exceeds slot size */
    if (msg_size > mbox->slot_size) {
       enableInterrupts();
-      return -1; // message size exceeds slot size
+      return -1;
    }
 
    slot = malloc(sizeof(mailslot));
-   list_add_node(&mbox->slots, slot);
+   active_slots++;
 
    memcpy(slot->buffer, msg_ptr, msg_size);
    slot->slot_id = mbox_id;
    slot->size = msg_size;
    slot->status = STATUS_USED;
 
-   active_slots++;
+   list_add_node(&mbox->slots, slot);
 
    enableInterrupts();
    return result;
@@ -339,10 +350,9 @@ int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
 int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    int result = 0;
-   slot_ptr slot = malloc(sizeof(mailslot));
+   slot_ptr slot;
    mbox_ptr mbox;
    proc_ptr proc;
-   char buffer[msg_size];
 
    disableInterrupts();
 
@@ -353,23 +363,51 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       return -1;
    }
 
+   /* there is a mbox slot available and a process is waiting to send */
+   if (mbox->slots.count < mbox->slot_count && mbox->waiting_send.count > 0) {
+      proc = list_pop_node(&mbox->waiting_send);
+      unblock_proc(proc->pid);
+   }
+
+   /* zero-slot */
+   if (mbox->slots.count == 0 && mbox->waiting_send.count > 0) {
+      proc = list_pop_node(&mbox->waiting_send);
+      slot = proc->slot;
+      unblock_proc(proc->pid);
+   }
+
+   /* no messages -- block */
+   if (mbox->slots.count < 1 && slot->status != STATUS_USED) {
+      proc = malloc(sizeof(waitingproc));
+      proc->next = NULL;
+      proc->prev = NULL;
+      proc->pid  = getpid();
+      proc->slot = NULL;
+
+      list_add_node(&mbox->waiting_rcv, proc);
+      block_me(BLOCKED_RCV);
+   }
+
+   /* get deliverable slot */
    if (mbox->slots.count > 0) {
       slot = list_pop_node(&mbox->slots);
    }
 
-   if (msg_size >= slot->size) {
-      /* copy data into message ptr and free slot */
-      memcpy(msg_ptr, slot->buffer, slot->size);
-      result = slot->size;
-      free(slot);
-      active_slots--;
-   } else {
-      // message size exceeds buffer size\n");
-      free(slot);
-      enableInterrupts();
-      result = -1;
+   if (slot != NULL) {
+      if (msg_size >= slot->size) {
+         /* copy data into message ptr and free slot */
+         memcpy(msg_ptr, slot->buffer, slot->size);
+         result = slot->size;
+         free(slot);
+         active_slots--;
+      } else {
+         /* message size exceeds buffer size */
+         free(slot);
+         enableInterrupts();
+         result = -1;
+      }
    }
-
+   
    enableInterrupts();
    return result;
 
