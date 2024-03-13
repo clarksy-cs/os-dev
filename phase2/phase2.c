@@ -19,17 +19,18 @@ extern int start2 (char *);
 extern void (*sys_vec[])(sysargs *args);
 static void nullsys(sysargs *args);
 int  GetNextEmptyMailbox(void);
+
 void clock_handler2(int dev, void *arg);
 void disk_handler(int dev, void *unit_ptr);
 void term_handler(int dev, void *unit_ptr);
 void syscall_handler(int dev, void *unit_ptr);
 int  waitdevice(int type, int unit, int *status);
+
 int  send_message(int mbox_id, void *msg_ptr, int msg_size, int wait); 
 int  receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait);
 
-void list_add_node(List *mbox_slots, slot_ptr new_node);
-slot_ptr list_pop_node(List *mbox_slots);
-
+void list_add_node(list *mbox_list, void *list_node);
+void *list_pop_node(list *mbox_list);
 
 // adjust these
 void disableInterrupts();
@@ -46,10 +47,11 @@ void (*sys_vec[MAXSYSCALLS])(sysargs *args);
 mailbox mbox_tbl[MAXMBOX];
 
 /* slot lists */
-List slot_tbl[MAXMBOX];
+list slot_tbl[MAXMBOX];
 
-/* global active slot count */
+/* global count variables */
 int active_slots = 0;
+int total_wprocs = 0;
 
 static int clock_mbox;
 static int disk_mbox[2];
@@ -107,8 +109,8 @@ int start1(char *arg) {
 
    /* initialize slot lists */
    for (int i = 0; i <= MAXMBOX; i++) {
-      slot_tbl[i].p_head = NULL;
-      slot_tbl[i].p_tail = NULL;
+      slot_tbl[i].head = NULL;
+      slot_tbl[i].tail = NULL;
       slot_tbl[i].count = 0;
    }
 
@@ -126,7 +128,7 @@ int start1(char *arg) {
       term_mbox[i] = MboxCreate(0, sizeof(int));
    }
 
-   /* ensure 0 slot mailboxes are created successfully */
+   /* ensure zero-slot mailboxes are created successfully */
    if ( clock_mbox <= -1 || 
       disk_mbox[0] <= -1 || 
       disk_mbox[1] <= -1 ||
@@ -195,6 +197,9 @@ int MboxCreate(int slots, int slot_size) {
    new_mbox->status  = MBSTATUS_RUNNING;
    new_mbox->slot_count = slots;
    new_mbox->slot_size = slot_size;
+   new_mbox->waiting_rcv.head = new_mbox->waiting_rcv.tail = NULL;
+   new_mbox->waiting_send.head = new_mbox->waiting_send.tail = NULL;
+   new_mbox->waiting_send.count = new_mbox->waiting_rcv.count = 0;
 
    return new_mbox->mbox_id;
 
@@ -240,6 +245,7 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    int result = 0;
+   int pid = getpid();
    slot_ptr slot;
    mbox_ptr mbox;
    proc_ptr proc;
@@ -256,21 +262,23 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    if (mbox->slots.count == mbox->slot_count) {
       // mailbox slots have reached capacity
+      block_me(BLOCKED_SEND);
+      enableInterrupts();
       return -2;
    }
 
    if (active_slots == MAXSLOTS) {
       // active slots have reached capacity
+      enableInterrupts();
       return -2;
    }
-/*
-   if (msg_ptr == NULL) {
-      console("send_message(): message is NULL\n");
-      enableInterrupts();
-      return -1;
+
+   if (mbox->slots.count > 0 && mbox->waiting_rcv.count > 0) {
+      unblock_proc(pid);
    }
-*/
+
    if (msg_size > mbox->slot_size) {
+      enableInterrupts();
       return -1; // message size exceeds slot size
    }
 
@@ -281,6 +289,8 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    slot->slot_id = mbox_id;
    slot->size = msg_size;
    slot->status = STATUS_USED;
+
+   active_slots++;
 
    enableInterrupts();
    return result;
@@ -339,7 +349,7 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    mbox = &mbox_tbl[mbox_id];
 
    if (mbox == NULL) {
-      console("send_message(): mailbox is invalid.\n");
+      console("send_message(): mailbox is invalid. \n");
       return -1;
    }
 
@@ -348,11 +358,15 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    }
 
    if (msg_size >= slot->size) {
+      /* copy data into message ptr and free slot */
       memcpy(msg_ptr, slot->buffer, slot->size);
       result = slot->size;
       free(slot);
+      active_slots--;
    } else {
       // message size exceeds buffer size\n");
+      free(slot);
+      enableInterrupts();
       result = -1;
    }
 
@@ -403,6 +417,51 @@ int GetNextEmptyMailbox(void) {
 
 } /* GetNextEmptyMailbox */
 
+
+void list_add_node(list *mbox_list, void *list_node) {
+
+   node *new_node = (node *)list_node;
+
+   if (mbox_list->head == NULL) {
+      /* list is empty */
+      mbox_list->head = new_node;
+      mbox_list->tail = new_node;
+   } else if (((node *)mbox_list->head)->next == NULL) {
+      /* list has only 1 node -- add to end */
+      ((node *)mbox_list->head)->next = new_node;
+      new_node->prev = mbox_list->head;
+      mbox_list->tail = new_node;
+   } else {
+      /* list has more than 1 node -- add to end */
+      ((node *)mbox_list->tail)->next = new_node;
+      new_node->prev = mbox_list->tail;
+      mbox_list->tail = new_node;
+   }
+
+   mbox_list->count++;
+}
+
+void *list_pop_node(list *mbox_list) {
+
+   node *rm_node = (node *)mbox_list->head;
+
+   if (mbox_list->head == mbox_list->tail) {
+      mbox_list->head = NULL;
+      mbox_list->tail = NULL;
+   } else {
+      mbox_list->head = ((node *)mbox_list->head)->next;
+      ((node *)mbox_list->head)->prev = NULL;
+   }
+
+   mbox_list->count--;
+
+   /* ensure count is not out of bounds */
+   if (mbox_list->count < 0) {
+      mbox_list->count = 0;
+   }
+
+   return rm_node;
+}
 
 /* ------------------------------------------------------------------------
    Name - waitdevice
@@ -530,50 +589,6 @@ int check_io() {
    }
 
    return 0; 
-}
-
-void list_add_node(List *mbox_slots, slot_ptr new_node) {
-
-   if (mbox_slots->p_head == NULL) {
-      /* list is empty */
-      mbox_slots->p_head = new_node;
-      mbox_slots->p_tail = new_node;
-   } else if (mbox_slots->p_head->next == NULL) {
-      /* list has only 1 node -- add to end */
-      mbox_slots->p_head->next = new_node;
-      new_node->prev = mbox_slots->p_head;
-      mbox_slots->p_tail = new_node;
-   } else {
-      /* list has more than 1 node -- add to end */
-      mbox_slots->p_tail->next = new_node;
-      new_node->prev = mbox_slots->p_tail;
-      mbox_slots->p_tail = new_node;
-   }
-
-   mbox_slots->count++;
-   active_slots++;
-}
-
-slot_ptr list_pop_node(List *mbox_slots) {
-
-   slot_ptr rm_node = mbox_slots->p_head;
-
-   if (mbox_slots->p_head == mbox_slots->p_tail) {
-      mbox_slots->p_head = NULL;
-      mbox_slots->p_tail = NULL;
-   } else {
-      mbox_slots->p_head = mbox_slots->p_head->next;
-      mbox_slots->p_head->prev = NULL;
-   }
-
-   mbox_slots->count--;
-   active_slots--;
-
-   if (mbox_slots->count < 0) {
-      mbox_slots->count = 0;
-   }
-
-   return rm_node;
 }
 
 void disableInterrupts() {}
