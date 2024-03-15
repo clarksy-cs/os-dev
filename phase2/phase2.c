@@ -254,33 +254,6 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       return -1;
    }
 
-   /* mbox slots are full */
-   if (mbox->slots.count == mbox->slot_count) {
-
-      proc = malloc(sizeof(waitingproc));
-      proc->next = NULL;
-      proc->prev = NULL;
-      proc->pid  = getpid();
-      proc->slot = NULL;
-
-      if (mbox->slot_count == 0) {
-         
-         slot = malloc(sizeof(mailslot));
-         active_slots++;
-
-         memcpy(slot->buffer, msg_ptr, msg_size);
-         slot->slot_id = mbox_id;
-         slot->size = msg_size;
-         slot->status = STATUS_USED;
-         proc->slot = slot;
-      }
-
-      list_add_node(&mbox->waiting_send, proc);
-      block_me(BLOCKED_SEND);
-      enableInterrupts();
-      return result;
-   }
-
    /* total slots at capacity */
    if (active_slots == MAXSLOTS) {
       enableInterrupts();
@@ -293,6 +266,14 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       return -1;
    }
 
+   /* allocate and initialize new process pointer */
+   proc = malloc(sizeof(waitingproc));
+   proc->next = NULL;
+   proc->prev = NULL;
+   proc->pid  = getpid();
+   proc->slot = NULL;
+
+   /* allocate and copy data into a slot */
    slot = malloc(sizeof(mailslot));
    active_slots++;
 
@@ -300,8 +281,38 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    slot->slot_id = mbox_id;
    slot->size = msg_size;
    slot->status = STATUS_USED;
+   proc->slot = slot;
 
-   list_add_node(&mbox->slots, slot);
+   /* if a process is waiting to receive - handoff and unblock */
+   if (mbox->waiting_rcv.count > 0) {
+      proc = list_pop_node(&mbox->waiting_rcv);
+      proc->slot = slot;
+      unblock_proc(proc->pid);
+   }
+
+   /* mbox slots are full or zer0-slot */
+   if (mbox->slots.count == mbox->slot_count) {
+      /* if conditional send - do not wait - return status code */
+      if (!wait) {
+         enableInterrupts();
+         return -2;
+      }
+
+      list_add_node(&mbox->waiting_send, proc);
+      enableInterrupts();
+      block_me(BLOCKED_SEND);
+   }
+
+   /* check for released processes */
+   if (mbox->released_procs.count > 0) {
+      proc = list_pop_node(&mbox->released_procs);
+      return -3;
+   }
+
+   /* mbox slot available - add to mbox */
+   if (mbox->slot_count != 0) {
+      list_add_node(&mbox->slots, slot);
+   }
 
    enableInterrupts();
    return result;
@@ -363,34 +374,44 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       return -1;
    }
 
-   /* there is a mbox slot available and a process is waiting to send */
-   if (mbox->slots.count < mbox->slot_count && mbox->waiting_send.count > 0) {
-      proc = list_pop_node(&mbox->waiting_send);
-      unblock_proc(proc->pid);
-   }
-
-   /* zero-slot */
-   if (mbox->slots.count == 0 && mbox->waiting_send.count > 0) {
-      proc = list_pop_node(&mbox->waiting_send);
-      slot = proc->slot;
-      unblock_proc(proc->pid);
-   }
-
    /* no messages -- block */
-   if (mbox->slots.count < 1 && slot->status != STATUS_USED) {
+   if (mbox->slots.count < 1 || mbox->slot_count == 0) {
+      /* if conditional receive - do not wait - return status code */
+      if (!wait) {
+         enableInterrupts();
+         return -2;
+      }
+
+      /* allocate and initialize new process pointer */
       proc = malloc(sizeof(waitingproc));
       proc->next = NULL;
       proc->prev = NULL;
       proc->pid  = getpid();
       proc->slot = NULL;
 
-      list_add_node(&mbox->waiting_rcv, proc);
-      block_me(BLOCKED_RCV);
-   }
+      /* if we need to wait on sender */
+      if (mbox->waiting_send.count == 0) {
+         list_add_node(&mbox->waiting_rcv, proc);
+         block_me(BLOCKED_RCV);
+      }
 
-   /* get deliverable slot */
+      if (proc->slot == NULL && mbox->waiting_send.count > 0) {
+         proc = list_pop_node(&mbox->waiting_send);
+         slot = proc->slot;
+         unblock_proc(proc->pid);
+      } else {
+         slot = proc->slot;
+      }
+   } 
+
    if (mbox->slots.count > 0) {
+      /* get deliverable slot */
       slot = list_pop_node(&mbox->slots);
+      /* there is a mbox slot available and a process is waiting to send */
+      if (mbox->slots.count < mbox->slot_count && mbox->waiting_send.count > 0) {
+         proc = list_pop_node(&mbox->waiting_send);
+         unblock_proc(proc->pid);
+      }
    }
 
    if (slot != NULL) {
@@ -423,6 +444,40 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    Side Effects - none.
    ----------------------------------------------------------------------- */
 int MboxRelease(int mbox_id) {
+
+   slot_ptr slot;
+   mbox_ptr mbox;
+   proc_ptr proc;
+
+   mbox = &mbox_tbl[mbox_id];
+
+   if (mbox == NULL) {
+      console("MboxRelease(): mailbox is invalid.\n");
+      return -1;
+   }
+
+   while (mbox->waiting_rcv.count > 0 || mbox->waiting_send.count > 0) {
+      /* zap process waiting to receive */
+      if (mbox->waiting_rcv.count > 0) {
+         proc = list_pop_node(&mbox->waiting_rcv);
+         list_add_node(&mbox->released_procs, proc);
+         unblock_proc(proc->pid);
+      }
+      /* zap process waiting to send */
+      if (mbox->waiting_send.count > 0) {
+         proc = list_pop_node(&mbox->waiting_send);
+         list_add_node(&mbox->released_procs, proc);
+         unblock_proc(proc->pid);
+      }
+   }
+
+   /* reinitialize mailbox to default */
+   mbox->mbox_id = -1;
+   mbox->status = MBSTATUS_EMPTY;
+   mbox->slot_count = -1;
+   mbox->slot_size = -1;
+
+   return 0;
 
 } /* MboxRelease */
 
@@ -542,8 +597,19 @@ int waitdevice(int type, int unit, int *status) {
 
 void clock_handler2(int dev, void *arg) {
 
-   time_slice();
-   // add correct code
+   int current_time = (sys_clock() * 1000);
+   int target_time  = current_time + 100000;
+
+   while (1) {
+
+      if (current_time >= target_time) {           // if current time reaches target
+         MboxCondSend(clock_mbox, 0, sizeof(int)); // cond send clock message
+         current_time = (sys_clock() * 1000);      // reset current time
+         target_time  = current_time + 100000;     // adjust target
+      }
+
+      current_time += (sys_clock() * 1000);        // accumulate time
+   }
 
 } /* clock_handler2 */
 
@@ -600,7 +666,7 @@ void syscall_handler(int dev, void *unit_ptr) {
    }
 
    if (sys_ptr->number < 0 || sys_ptr->number >= MAXSYSCALLS) {
-      console("syscall_handler(): sys number 50 is wrong. Halting...\n");
+      console("syscall_handler(): sys number 50 is wrong.  Halting...\n");
       halt(1);
    }
 
@@ -620,7 +686,13 @@ int check_io() {
    /* for any active mailbox, check if a process is waiting on delivery */
    for (int i = 0; i < MAXMBOX; i++) {
       if (mbox_tbl[i].status != MBSTATUS_EMPTY) {
-         if (mbox_tbl[i].waiting_rcv.count > 0) {
+         if (mbox_tbl[i].waiting_rcv.count > 0  ||
+             mbox_tbl[i].waiting_send.count > 0 ||
+             mbox_tbl[i].slots.count > 0) {
+            // console("check_io(): mailbox %d is not empty.\n", i);
+            // console("check_io(): rvc_list: %d.\n", mbox_tbl[i].waiting_rcv.count);
+            // console("check_io(): snd_list: %d.\n", mbox_tbl[i].waiting_send.count);
+            // console("check_io(): slt_list: %d.\n", mbox_tbl[i].slots.count);
             return -1;
          }
       }
