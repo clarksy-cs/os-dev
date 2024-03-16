@@ -248,8 +248,7 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    mbox = &mbox_tbl[mbox_id];
 
-   if (mbox == NULL) {
-      console("send_message(): mailbox is invalid.\n");
+   if (mbox == NULL || mbox->status == MBSTATUS_EMPTY) {
       enableInterrupts();
       return -1;
    }
@@ -375,8 +374,8 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    mbox = &mbox_tbl[mbox_id];
 
-   if (mbox == NULL) {
-      console("send_message(): mailbox is invalid. \n");
+   if (mbox == NULL || mbox->status == MBSTATUS_EMPTY) {
+      enableInterrupts();
       return -1;
    }
 
