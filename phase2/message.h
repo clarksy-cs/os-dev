@@ -5,6 +5,7 @@
 
 #define BLOCKED_SEND       10
 #define BLOCKED_RCV        11
+#define BLOCKED_RL         12
 
 #define STATUS_FREE        0
 #define STATUS_USED        1

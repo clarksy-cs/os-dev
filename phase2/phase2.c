@@ -240,9 +240,9 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    int result = 0;
-   slot_ptr slot;
-   mbox_ptr mbox;
-   proc_ptr proc;
+   slot_ptr slot = NULL;
+   mbox_ptr mbox = NULL;
+   proc_ptr proc = NULL;
 
    disableInterrupts();
 
@@ -288,6 +288,8 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       proc = list_pop_node(&mbox->waiting_rcv);
       proc->slot = slot;
       unblock_proc(proc->pid);
+      enableInterrupts();
+      return result;
    }
 
    /* mbox slots are full or zer0-slot */
@@ -303,9 +305,13 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       block_me(BLOCKED_SEND);
    }
 
-   /* check for released processes */
+   /* check for released mailbox/processes */
    if (mbox->released_procs.count > 0) {
       proc = list_pop_node(&mbox->released_procs);
+      /* if last zapped process - unblock releaser */
+      if (mbox->released_procs.count == 0) {
+         unblock_proc(mbox->releasing_pid);
+      }
       return -3;
    }
 
@@ -361,9 +367,9 @@ int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_max_size) {
 int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    int result = 0;
-   slot_ptr slot;
-   mbox_ptr mbox;
-   proc_ptr proc;
+   slot_ptr slot = NULL;
+   mbox_ptr mbox = NULL;
+   proc_ptr proc = NULL;
 
    disableInterrupts();
 
@@ -395,6 +401,16 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
          block_me(BLOCKED_RCV);
       }
 
+   /* check for released mailbox/processes */
+   if (mbox->released_procs.count > 0) {
+      proc = list_pop_node(&mbox->released_procs);
+      /* if last zapped process - unblock releaser */
+      if (mbox->released_procs.count == 0) {
+         unblock_proc(mbox->releasing_pid);
+      }
+      return -3;
+   }
+
       if (proc->slot == NULL && mbox->waiting_send.count > 0) {
          proc = list_pop_node(&mbox->waiting_send);
          slot = proc->slot;
@@ -404,7 +420,7 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       }
    } 
 
-   if (mbox->slots.count > 0) {
+   if (slot == NULL && mbox->slots.count > 0) {
       /* get deliverable slot */
       slot = list_pop_node(&mbox->slots);
       /* there is a mbox slot available and a process is waiting to send */
@@ -445,9 +461,9 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
    ----------------------------------------------------------------------- */
 int MboxRelease(int mbox_id) {
 
-   slot_ptr slot;
-   mbox_ptr mbox;
-   proc_ptr proc;
+   slot_ptr slot = NULL;
+   mbox_ptr mbox = NULL;
+   proc_ptr proc = NULL;
 
    mbox = &mbox_tbl[mbox_id];
 
@@ -455,6 +471,15 @@ int MboxRelease(int mbox_id) {
       console("MboxRelease(): mailbox is invalid.\n");
       return -1;
    }
+
+   /* set releaser pid */
+   mbox->releasing_pid = getpid();
+
+   /* reinitialize mailbox to default */
+   mbox->mbox_id = -1;
+   mbox->status = MBSTATUS_EMPTY;
+   mbox->slot_count = -1;
+   mbox->slot_size = -1;
 
    while (mbox->waiting_rcv.count > 0 || mbox->waiting_send.count > 0) {
       /* zap process waiting to receive */
@@ -471,11 +496,13 @@ int MboxRelease(int mbox_id) {
       }
    }
 
-   /* reinitialize mailbox to default */
-   mbox->mbox_id = -1;
-   mbox->status = MBSTATUS_EMPTY;
-   mbox->slot_count = -1;
-   mbox->slot_size = -1;
+   /* block until all released processes have quit */
+   if (mbox->released_procs.count > 0) {
+      block_me(BLOCKED_RL);
+   }
+
+   /* restore mailbox releasing pid */
+   mbox->releasing_pid = -1;
 
    return 0;
 
@@ -567,9 +594,6 @@ int waitdevice(int type, int unit, int *status) {
 
    int result = 0;
 
-   /* sanity check */
-   // see phase2 description
-
    switch (type) {
       case CLOCK_DEV:
          result = MboxReceive(clock_mbox, status, sizeof(int));
@@ -603,7 +627,7 @@ void clock_handler2(int dev, void *arg) {
    while (1) {
 
       if (current_time >= target_time) {           // if current time reaches target
-         MboxCondSend(clock_mbox, 0, sizeof(int)); // cond send clock message
+         MboxCondSend(clock_mbox, NULL, 0);        // cond send clock message
          current_time = (sys_clock() * 1000);      // reset current time
          target_time  = current_time + 100000;     // adjust target
       }
@@ -701,8 +725,21 @@ int check_io() {
    return 0; 
 }
 
-void disableInterrupts() {}
-void enableInterrupts() {}
+void disableInterrupts() {
+   union psr_values current_psr;
+   current_psr.integer_part = psr_get();
+   current_psr.bits.cur_int_enable = 0;
+   current_psr.bits.prev_int_enable = 1;
+   psr_set(current_psr.integer_part);
+}
+
+void enableInterrupts() {
+   union psr_values current_psr;
+   current_psr.integer_part = psr_get();
+   current_psr.bits.cur_int_enable = 1;
+   current_psr.bits.prev_int_enable = 0;
+   psr_set(current_psr.integer_part);
+}
 
 /* check if process is running in kernel mode */
 void check_kernel_mode(char *str) {
