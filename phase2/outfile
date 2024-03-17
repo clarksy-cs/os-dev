@@ -629,14 +629,18 @@ XXp1(): received message #2 containing: Second message
 XXp1(): received message #3 containing: Third message
 XXp1(): received message #4 containing: Fourth message
 XXp1(): received message #5 containing: Fifth message
+XXp1(): received message #6 containing: Sixth message
+XXp1(): received message #7 containing: Seventh message
+XXp1(): received message #8 containing: Eighth message
 XXp2(): priority 2, after sending message, result = 0
 XXp2(): priority 3, after sending message, result = 0
 XXp2(): priority 4, after sending message, result = 0
+XXp3(): join'd with child 8 whose status is -1
 XXp3(): join'd with child 7 whose status is -2
 XXp3(): join'd with child 6 whose status is -3
 XXp3(): join'd with child 5 whose status is -4
-check_deadlock: numProc is 5
-check_deadlock: processes still present, halting...
+start2(): joined with kid 4, status = -5
+All processes completed.
 
 starting test 25 ....
 

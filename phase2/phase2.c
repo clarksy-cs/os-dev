@@ -107,9 +107,6 @@ int start1(char *arg) {
       mbox_tbl[i].slot_size = -1;
    }
 
-   /* initialize waiting process table */
-   waitingproc waiting_procs[MAXPROC];
-
    /* allocate mailboxes for interrupt handlers */
    clock_mbox = MboxCreate(0, sizeof(int));
 
@@ -248,6 +245,7 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    mbox = &mbox_tbl[mbox_id];
 
+   /* return error if mailbox is invalid or empty */
    if (mbox == NULL || mbox->status == MBSTATUS_EMPTY) {
       enableInterrupts();
       return -1;
@@ -314,9 +312,18 @@ int send_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
       return -3;
    }
 
+   /* slot was handed off in receive */
+   if (proc->slot == NULL) {
+      return result;
+   }
+
    /* mbox slot available - add to mbox */
    if (mbox->slot_count != 0) {
       list_add_node(&mbox->slots, slot);
+      if (mbox->waiting_rcv.count > 0) {
+         proc = list_pop_node(&mbox->waiting_rcv);
+         unblock_proc(proc->pid);
+      }
    }
 
    enableInterrupts();
@@ -374,6 +381,7 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
 
    mbox = &mbox_tbl[mbox_id];
 
+   /* return error if mailbox is invalid or empty */
    if (mbox == NULL || mbox->status == MBSTATUS_EMPTY) {
       enableInterrupts();
       return -1;
@@ -400,31 +408,36 @@ int receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait) {
          block_me(BLOCKED_RCV);
       }
 
-   /* check for released mailbox/processes */
-   if (mbox->released_procs.count > 0) {
-      proc = list_pop_node(&mbox->released_procs);
-      /* if last zapped process - unblock releaser */
-      if (mbox->released_procs.count == 0) {
-         unblock_proc(mbox->releasing_pid);
+      /* check for released mailbox/processes */
+      if (mbox->released_procs.count > 0) {
+         proc = list_pop_node(&mbox->released_procs);
+         /* if last zapped process - unblock releaser */
+         if (mbox->released_procs.count == 0) {
+            unblock_proc(mbox->releasing_pid);
+         }
+         return -3;
       }
-      return -3;
-   }
 
+      /* if message wasn't handed off directly - pull from mailbox slot */
       if (proc->slot == NULL && mbox->waiting_send.count > 0) {
          proc = list_pop_node(&mbox->waiting_send);
          slot = proc->slot;
          unblock_proc(proc->pid);
       } else {
+         /* it was handed off directly */
          slot = proc->slot;
       }
    } 
 
+   /* if slot is still not populated and there are deliverables */
    if (slot == NULL && mbox->slots.count > 0) {
       /* get deliverable slot */
       slot = list_pop_node(&mbox->slots);
       /* there is a mbox slot available and a process is waiting to send */
       if (mbox->slots.count < mbox->slot_count && mbox->waiting_send.count > 0) {
          proc = list_pop_node(&mbox->waiting_send);
+         list_add_node(&mbox->slots, proc->slot);
+         proc->slot = NULL;
          unblock_proc(proc->pid);
       }
    }
@@ -466,8 +479,9 @@ int MboxRelease(int mbox_id) {
 
    mbox = &mbox_tbl[mbox_id];
 
-   if (mbox == NULL) {
-      console("MboxRelease(): mailbox is invalid.\n");
+   /* return error if mailbox is invalid or empty */
+   if (mbox == NULL || mbox->status == MBSTATUS_EMPTY) {
+      enableInterrupts();
       return -1;
    }
 
@@ -521,12 +535,14 @@ int GetNextEmptyMailbox(void) {
    int next_pos = next_mbox_id % MAXMBOX;
    int num_full = 0;
 
+   /* iterate mailbox table for empty position */
    while ((num_full < MAXMBOX) && mbox_tbl[next_pos].status != MBSTATUS_EMPTY) {
       next_mbox_id++;
       next_pos = next_mbox_id % MAXMBOX;
       num_full++;
    }
 
+   /* empty position found in mailbox table */
    if (num_full < MAXMBOX) {
       new_mbox_id = next_mbox_id++;
       return new_mbox_id;
@@ -546,12 +562,12 @@ void list_add_node(list *mbox_list, void *list_node) {
       mbox_list->head = new_node;
       mbox_list->tail = new_node;
    } else if (((node *)mbox_list->head)->next == NULL) {
-      /* list has only 1 node -- add to end */
+      /* list has only 1 node - add to end */
       ((node *)mbox_list->head)->next = new_node;
       new_node->prev = mbox_list->head;
       mbox_list->tail = new_node;
    } else {
-      /* list has more than 1 node -- add to end */
+      /* list has more than 1 node - add to end */
       ((node *)mbox_list->tail)->next = new_node;
       new_node->prev = mbox_list->tail;
       mbox_list->tail = new_node;
@@ -565,9 +581,11 @@ void *list_pop_node(list *mbox_list) {
    node *rm_node = (node *)mbox_list->head;
 
    if (mbox_list->head == mbox_list->tail) {
+      /* list has only 1 node - restore pointers */
       mbox_list->head = NULL;
       mbox_list->tail = NULL;
    } else {
+      /* list has more than 1 node - adjust pointers */
       mbox_list->head = ((node *)mbox_list->head)->next;
       ((node *)mbox_list->head)->prev = NULL;
    }
@@ -642,18 +660,15 @@ void disk_handler(int dev, void *unit_ptr) {
    int result;
    int unit = (int)unit_ptr;
 
-   /* sanity checks */
+   /* sanity check */
    if (unit < 0 || unit > 1) {
-      // checks which disk is sending data
-      // see phase 2 description for return values
+      console("disk_handler(): unit out of range. Halting...\n");
+      halt(1);
    }
-   // make sure the arguments dev and unit are valid
-   // more checking if necessary
 
    device_input(DISK_DEV, unit, &status);
 
    result = MboxCondSend(disk_mbox[unit], &status, sizeof(status));
-   // do some error checking on the returned result value
 
 } /* disk_handler */
 
@@ -663,17 +678,15 @@ void term_handler(int dev, void *unit_ptr) {
    int result;
    int unit = (int)unit_ptr;
 
-   /* sanity checks */
+   /* sanity check */
    if (unit < 0 || unit > TERM_UNITS) {
-      // see phase 2 description for return values
+      console("term_handler(): unit out of range. Halting...\n");
+      halt(1);
    }
-   // make sure the arguments dev and unit are valid
-   // more checking if necessary
 
    device_input(TERM_DEV, unit, &status);
 
    result = MboxCondSend(term_mbox[unit], &status, sizeof(status));
-   // do some error checking on the returned result value
 
 } /* term_handler */
 
@@ -712,6 +725,7 @@ int check_io() {
          if (mbox_tbl[i].waiting_rcv.count > 0  ||
              mbox_tbl[i].waiting_send.count > 0 ||
              mbox_tbl[i].slots.count > 0) {
+            // debug tools:
             // console("check_io(): mailbox %d is not empty.\n", i);
             // console("check_io(): rvc_list: %d.\n", mbox_tbl[i].waiting_rcv.count);
             // console("check_io(): snd_list: %d.\n", mbox_tbl[i].waiting_send.count);
@@ -724,6 +738,7 @@ int check_io() {
    return 0; 
 }
 
+/* best attempt at disabling interrupts */
 void disableInterrupts() {
    union psr_values current_psr;
    current_psr.integer_part = psr_get();
@@ -732,6 +747,7 @@ void disableInterrupts() {
    psr_set(current_psr.integer_part);
 }
 
+/* best attempt at enabling interrupts */
 void enableInterrupts() {
    union psr_values current_psr;
    current_psr.integer_part = psr_get();
