@@ -19,20 +19,15 @@ extern int start2 (char *);
 extern void (*sys_vec[])(sysargs *args);
 static void nullsys(sysargs *args);
 int  GetNextEmptyMailbox(void);
-
 void clock_handler2(int dev, void *arg);
 void disk_handler(int dev, void *unit_ptr);
 void term_handler(int dev, void *unit_ptr);
 void syscall_handler(int dev, void *unit_ptr);
 int  waitdevice(int type, int unit, int *status);
-
 int  send_message(int mbox_id, void *msg_ptr, int msg_size, int wait); 
 int  receive_message(int mbox_id, void *msg_ptr, int msg_size, int wait);
-
 void list_add_node(list *mbox_list, void *list_node);
 void *list_pop_node(list *mbox_list);
-
-// adjust these
 void disableInterrupts();
 void enableInterrupts();
 void check_kernel_mode(char *str);
