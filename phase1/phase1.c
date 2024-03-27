@@ -598,7 +598,7 @@ void disableInterrupts(void) {
     halt(1);
   } else
     /* in kernel mode */
-    psr_set( psr_get() & ~PSR_CURRENT_INT );
+    psr_set(psr_get() & ~PSR_CURRENT_INT);
 } /* disableInterrupts */
 
 static void enableInterrupts(void) {

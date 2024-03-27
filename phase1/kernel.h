@@ -1,8 +1,7 @@
 #define DEBUG 0
 
 typedef struct proc_struct proc_struct;
-
-typedef struct proc_struct * proc_ptr;
+typedef struct proc_struct *proc_ptr;
 
 #define STATUS_EMPTY          0
 #define STATUS_RUNNING        1

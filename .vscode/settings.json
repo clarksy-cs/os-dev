@@ -3,6 +3,7 @@
     "files.associations": {
         "phase1.h": "c",
         "kernel.h": "c",
-        "strings.h": "c"
+        "strings.h": "c",
+        "usloss.h": "c"
     }
 }
