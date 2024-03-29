@@ -8,7 +8,7 @@
             "args": [
                 "-B",
                 "-f",
-                "${workspaceFolder}/phase2/Makefile",
+                "${workspaceFolder}/phase3/Makefile",
                 "${fileBasenameNoExtension}"
             ],
             "presentation": {

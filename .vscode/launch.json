@@ -8,7 +8,7 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/phase2/${fileBasenameNoExtension}",
+            "program": "${workspaceFolder}/phase3/${fileBasenameNoExtension}",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
