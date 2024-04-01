@@ -1,3 +1,32 @@
+/*
+* Create first user-level process and wait for it to finish.
+* These are lower-case because they are not system calls;
+* system calls cannot be invoked from kernel mode.
+* Assumes kernel-mode versions of the system calls
+* with lower-case names.  I.e., Spawn is the user-mode function
+* called by the test cases; spawn is the kernel-mode function that
+* is called by the syscall_handler; spawn_real is the function that
+* contains the implementation and is called by spawn.
+*
+* Spawn() is in libuser.c.  It invokes usyscall()
+* The system call handler calls a function named spawn() -- note lower
+* case -- that extracts the arguments from the sysargs pointer, and
+* checks them for possible errors.  This function then calls spawn_real().
+*
+* Here, we only call spawn_real(), since we are already in kernel mode.
+*
+* spawn_real() will create the process by using a call to fork1 to
+* create a process executing the code in spawn_launch().  spawn_real()
+* and spawn_launch() then coordinate the completion of the phase 3
+* process table entries needed for the new process.  spawn_real() will
+* return to the original caller of Spawn, while spawn_launch() will
+* begin executing the function passed to Spawn. spawn_launch() will
+* need to switch to user-mode before allowing user code to execute.
+* spawn_real() will return to spawn(), which will put the return
+* values back into the sysargs pointer, switch to user-mode, and 
+* return to the user code that called Spawn.
+*/
+
 /* ------------------------------------------------------------------------
    phase3.c
    Applied Technology
@@ -13,34 +42,17 @@
 #include <phase2.h>
 #include <phase3.h>
 #include <usyscall.h>
+#include <libuser.h>
+#include <provided_prototypes.h>
 #include "sems.h"
 
 /* ------------------------- Prototypes ----------------------------------- */
 int start2(char *arg);
 int start3(char *arg);
 static void nullsys3(sysargs *args_ptr);
-/*
-extern int  Spawn(char *name, int (*func)(char *), char *arg, int stack_size, int priority, int *pid);
-extern int  Wait(int *pid, int *status);
-extern void Terminate(int status);
-extern void GetTimeofDay(int *tod);
-extern void CPUTime(int *cpu);
-extern void GetPID(int *pid);
-extern int  SemCreate(int value, int *semaphore);
-extern int  SemP(int semaphore);
-extern int  SemV(int semaphore);
-extern int  SemFree(int semaphore);
-*/
-int  spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority);
-int  wait_real(int *status);
-void terminate_real(int exit_code);
-int  gettimeofday_real(int *time);
-int  cputime_real(int *time);
-int  getPID_real(int *pid);
-int  semcreate_real(int init_value);
-int  semp_real(int semaphore);
-int  semv_real(int semaphore);
-int  semfree_real(int semaphore);
+static void spawn(sysargs *args_ptr);
+static void wait(sysargs *args_ptr);
+static void terminate(sysargs *args_ptr);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -78,37 +90,10 @@ int start2(char *arg) {
         sys_vec[i] = nullsys3;
     }
 
-    // sys_vec[SYS_SPAWN] = Spawn;
+    sys_vec[SYS_SPAWN] = spawn;
+    sys_vec[SYS_WAIT] = wait;
+    sys_vec[SYS_TERMINATE] = terminate;
 
-
-    /*
-     * Create first user-level process and wait for it to finish.
-     * These are lower-case because they are not system calls;
-     * system calls cannot be invoked from kernel mode.
-     * Assumes kernel-mode versions of the system calls
-     * with lower-case names.  I.e., Spawn is the user-mode function
-     * called by the test cases; spawn is the kernel-mode function that
-     * is called by the syscall_handler; spawn_real is the function that
-     * contains the implementation and is called by spawn.
-     *
-     * Spawn() is in libuser.c.  It invokes usyscall()
-     * The system call handler calls a function named spawn() -- note lower
-     * case -- that extracts the arguments from the sysargs pointer, and
-     * checks them for possible errors.  This function then calls spawn_real().
-     *
-     * Here, we only call spawn_real(), since we are already in kernel mode.
-     *
-     * spawn_real() will create the process by using a call to fork1 to
-     * create a process executing the code in spawn_launch().  spawn_real()
-     * and spawn_launch() then coordinate the completion of the phase 3
-     * process table entries needed for the new process.  spawn_real() will
-     * return to the original caller of Spawn, while spawn_launch() will
-     * begin executing the function passed to Spawn. spawn_launch() will
-     * need to switch to user-mode before allowing user code to execute.
-     * spawn_real() will return to spawn(), which will put the return
-     * values back into the sysargs pointer, switch to user-mode, and 
-     * return to the user code that called Spawn.
-     */
     pid = spawn_real("start3", start3, NULL, 4 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
@@ -137,7 +122,7 @@ int launch_usermode(char *arg) {
     pid = getpid();
     proc_slot = pid % MAXPROC;
 
-    MboxReceive(uproc_tbl[proc_slot].private_mbox, NULL, 0);
+    MboxReceive(uproc_tbl[proc_slot].startup_mbox, NULL, 0);
 
     /* set the user mode */
     psr = psr_get();
@@ -150,6 +135,34 @@ int launch_usermode(char *arg) {
     return result;
 
 } /* launch_usermode */
+
+static void spawn(sysargs *args_ptr) {
+    
+    int (*func)(char *);
+    char *arg;
+    char *name;
+    int stack_size;
+    int priority;
+    int kidpid;
+    // more variables
+
+    if (is_zapped) {
+        // terminate process
+    }
+
+    func = args_ptr->arg1;
+    arg = args_ptr->arg2;
+    stack_size = (int)args_ptr->arg3;
+    priority = (int)args_ptr->arg4;
+    name = args_ptr->arg5;
+
+    kidpid = spawn_real(name, func, arg, stack_size, priority);
+    args_ptr->arg1 = (void *)kidpid;
+    args_ptr->arg4 = (void *)0;
+
+    return;
+
+} /* spawn */
 
 int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority) {
 
@@ -170,20 +183,39 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
     uproc_tbl[proc_slot].entrypoint = func;     // pass launch_usermode function to call
 
     /* tell process to start */
-    MboxCondSend(uproc_tbl[proc_slot].private_mbox, NULL, 0);
+    MboxCondSend(uproc_tbl[proc_slot].startup_mbox, NULL, 0);
 
     return pid;
 
 } /* spawn_real */
 
-int  wait_real(int *status) {
+static void wait(sysargs *args_ptr) {
 
-    join(status);
-    return 0;
+    // int status = wait_real(0);
+    args_ptr->arg1 = (void *)0;
+    args_ptr->arg2 = (void *)0;
+    args_ptr->arg4 = (void *)0;
+    
+    return;
+
+} /* wait */
+
+int wait_real(int *status) {
+
+    int pid = join(status);
+    return pid;
 
 } /* wait_real */
 
+static void terminate(sysargs *args_ptr) {
+
+    int exit_code = (int)args_ptr->arg1;
+    terminate_real(exit_code);
+
+} /* terminate */
+
 void terminate_real(int exit_code) {
 
+    quit(exit_code);
 
 } /* terminate_real */
