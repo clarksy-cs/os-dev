@@ -13,6 +13,9 @@
 typedef struct userproc userproc;
 typedef struct userproc *uproc_ptr;
 
+typedef struct semaphore semaphore;
+typedef struct semaphore *sem_ptr;
+
 typedef struct node {
    void     *next;
    void     *prev;
@@ -23,6 +26,12 @@ typedef struct list {
    void     *tail;
    int      count;
 } list;
+
+struct semaphore {
+   int      status;
+   int      id;
+   int      value;
+};
 
 struct userproc {
    uproc_ptr next;
