@@ -57,6 +57,10 @@ static void wait(sysargs *args_ptr);
 static void terminate(sysargs *args_ptr);
 static void cputime(sysargs *args_ptr);
 static void timeofday(sysargs *args_ptr);
+static void getPID(sysargs *args_ptr);
+static void semp(sysargs *args_ptr);
+static void semv(sysargs *args_ptr);
+static void semfree(sysargs *args_ptr);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -67,7 +71,8 @@ userproc uproc_tbl[MAXPROC];
 semaphore sem_tbl[MAXSEMS];
 
 /* global count variables */
-static int next_sem_id = 0;
+int next_sem_id = 0;
+int waitingprocs = 0;
 
 /* -------------------------- Functions ----------------------------------- */
 
@@ -115,6 +120,10 @@ int start2(char *arg) {
     sys_vec[SYS_SEMCREATE] = semcreate;
     sys_vec[SYS_GETTIMEOFDAY] = timeofday;
     sys_vec[SYS_CPUTIME] = cputime;
+    sys_vec[SYS_GETPID] = getPID;
+    sys_vec[SYS_SEMP] = semp;
+    sys_vec[SYS_SEMV] = semv;
+    sys_vec[SYS_SEMFREE] = semfree;
 
     pid = spawn_real("start3", start3, NULL, 4 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
@@ -322,21 +331,129 @@ void terminate_real(int exit_code) {
 
 static void cputime(sysargs *args_ptr){ 
 
+    int *ptr = (int *)malloc(sizeof(int));
+    int cpu;
+
+    cpu = cputime_real(ptr);
+    args_ptr->arg1 = (void *)cpu;
+
+    free(ptr);
 
 } /* cputime */
 
 int cputime_real(int *time) {
 
+    *time = readtime();
 
 } /* cputime_real */
 
 
 static void timeofday(sysargs *args_ptr) {
 
+    int *ptr = (int *)malloc(sizeof(int));
+    int tod;
+
+    tod = gettimeofday_real(ptr);
+    args_ptr->arg1 = (void *)tod;
+
+    free(ptr);
 
 } /* timeofday */
 
 int gettimeofday_real(int *time) {
 
+    return sys_clock();
 
 } /* gettimeofday_real */
+
+static void getPID(sysargs *arg_ptr) {
+
+    int *ptr = (int *)malloc(sizeof(int));
+    int pid;
+
+    pid = getPID_real(ptr);
+    arg_ptr->arg1 = (void *)pid;
+
+    free(ptr);
+
+} /* getPID */
+
+int getPID_real(int *pid) {
+    
+    int cpid = getpid();
+
+    if (cpid < 0 || cpid >= MAXPROC) {
+        return -1;
+    }
+
+    return cpid;
+
+} /* getPID_real */
+
+static void semp(sysargs *args_ptr) {
+
+    int result;
+
+    result = semp_real((int)args_ptr->arg1);
+    args_ptr->arg4 = (void *)result;
+
+} /* semp */
+
+int semp_real(int semaphore) {
+
+    sem_ptr sem = &sem_tbl[semaphore];
+
+    if (sem->value == 0) {
+        waitingprocs++;
+        MboxReceive(uproc_tbl[semaphore].private_mbox, NULL, 0);
+    }
+
+    sem->value -= 1;
+
+    return 0;
+
+} /* semp_real */
+
+static void semv(sysargs *args_ptr) {
+
+    int result;
+
+    result = semv_real((int)args_ptr->arg1);
+    args_ptr->arg4 = (void *)result;
+
+} /* semv */
+
+int semv_real(int semaphore) {
+
+    sem_ptr sem = &sem_tbl[semaphore];
+
+    sem->value += 1;
+
+    if (waitingprocs > 0) { /*************REPLACE WAITINGPROCS WITH ACTUAL LIST**********/
+        waitingprocs--;
+        MboxSend(uproc_tbl[semaphore].private_mbox, NULL, 0);
+    }
+
+    return 0;
+
+} /* semv_real */
+
+static void semfree(sysargs *args_ptr) {
+
+    int result;
+
+    result = semfree_real((int)args_ptr->arg1);
+    args_ptr->arg4 = (void *)result;
+
+} /* semfree */
+
+int semfree_real(int semaphore) {
+
+    sem_ptr sem = &sem_tbl[semaphore];
+    sem->value = -1;
+    sem->id = -1;
+    sem->status = STATUS_FREE;
+
+    return 0;
+
+} /* semfree_real */
