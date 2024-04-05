@@ -21,16 +21,17 @@ typedef struct node {
    void     *prev;
 } node;
 
-typedef struct list {
+typedef struct List {
    void     *head;
    void     *tail;
    int      count;
-} list;
+} List;
 
 struct semaphore {
    int      status;
    int      id;
    int      value;
+   List     waitingprocs;
 };
 
 struct userproc {
@@ -42,6 +43,7 @@ struct userproc {
    char      name[MAXNAME];
    int       startup_mbox;
    int       private_mbox;
+   List      children;
 };
 
 struct psr_bits {

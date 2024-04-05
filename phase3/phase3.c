@@ -1,32 +1,3 @@
-/*
-* Create first user-level process and wait for it to finish.
-* These are lower-case because they are not system calls;
-* system calls cannot be invoked from kernel mode.
-* Assumes kernel-mode versions of the system calls
-* with lower-case names.  I.e., Spawn is the user-mode function
-* called by the test cases; spawn is the kernel-mode function that
-* is called by the syscall_handler; spawn_real is the function that
-* contains the implementation and is called by spawn.
-*
-* Spawn() is in libuser.c.  It invokes usyscall()
-* The system call handler calls a function named spawn() -- note lower
-* case -- that extracts the arguments from the sysargs pointer, and
-* checks them for possible errors.  This function then calls spawn_real().
-*
-* Here, we only call spawn_real(), since we are already in kernel mode.
-*
-* spawn_real() will create the process by using a call to fork1 to
-* create a process executing the code in spawn_launch().  spawn_real()
-* and spawn_launch() then coordinate the completion of the phase 3
-* process table entries needed for the new process.  spawn_real() will
-* return to the original caller of Spawn, while spawn_launch() will
-* begin executing the function passed to Spawn. spawn_launch() will
-* need to switch to user-mode before allowing user code to execute.
-* spawn_real() will return to spawn(), which will put the return
-* values back into the sysargs pointer, switch to user-mode, and 
-* return to the user code that called Spawn.
-*/
-
 /* ------------------------------------------------------------------------
    phase3.c
    Applied Technology
@@ -61,6 +32,8 @@ static void getPID(sysargs *args_ptr);
 static void semp(sysargs *args_ptr);
 static void semv(sysargs *args_ptr);
 static void semfree(sysargs *args_ptr);
+void list_add_node(List *list, void *list_node);
+void *list_pop_node(List *list);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -191,7 +164,7 @@ int semcreate_real(int init_value) {
       return next_sem_id;
    }
 
-   /* set mailbox position in table */
+   /* set sem position in table */
    sem_pos = next_sem_id % MAXSEMS;
 
    /* pointer to new sem in sem table */
@@ -218,6 +191,10 @@ int launch_usermode(char *arg) {
 
     MboxReceive(uproc_tbl[proc_slot].startup_mbox, NULL, 0);
 
+    if (is_zapped()) {
+        quit(0);
+    }
+
     /* set the user mode */
     psr = psr_get();
     psr &= ~PSR_CURRENT_MODE;
@@ -240,11 +217,6 @@ static void spawn(sysargs *args_ptr) {
     int stack_size;
     int priority;
     int kidpid;
-    // more variables
-
-    if (is_zapped) {
-        // terminate process
-    }
 
     func = args_ptr->arg1;
     arg = args_ptr->arg2;
@@ -262,26 +234,32 @@ static void spawn(sysargs *args_ptr) {
 
 int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority) {
 
-    int pid;
+    int parent;
+    int kidpid;
     int proc_slot;
+    uproc_ptr kidptr;
 
-    pid = fork1(name, launch_usermode, arg, stack_size, priority);
+    parent = getpid() % MAXPROC;
 
-    if (pid < 0) {
-        console("PID invalid.\n");
-        halt(1);
+    kidpid = fork1(name, launch_usermode, arg, stack_size, priority);
+
+    if (kidpid < 0) {
+        return -1;
     }
 
-    proc_slot = pid % MAXPROC;
+    proc_slot = kidpid % MAXPROC;
+    kidptr = &uproc_tbl[proc_slot];
 
-    uproc_tbl[proc_slot].pid = pid;             // get child pid
-    uproc_tbl[proc_slot].parentPID = getpid();  // get parent pid
-    uproc_tbl[proc_slot].entrypoint = func;     // pass launch_usermode function to call
+    kidptr->pid = kidpid;            // get child pid
+    kidptr->parentPID = getpid();    // get parent pid
+    kidptr->entrypoint = func;       // pass launch_usermode function to call
+
+    list_add_node(&uproc_tbl[parent].children, kidptr);
 
     /* tell process to start */
     MboxCondSend(uproc_tbl[proc_slot].startup_mbox, NULL, 0);
 
-    return pid;
+    return kidpid;
 
 } /* spawn_real */
 
@@ -324,6 +302,23 @@ static void terminate(sysargs *args_ptr) {
 } /* terminate */
 
 void terminate_real(int exit_code) {
+
+    int proc_slot = getpid() % MAXPROC;
+    uproc_ptr current = &uproc_tbl[proc_slot];
+    uproc_ptr child, parent;
+
+    while (current->children.count > 0) {
+        child = list_pop_node(&current->children);
+        zap(child->pid);
+    }
+
+    if (current->parentPID != -1) {
+        int parentslot = current->parentPID % MAXPROC;
+        parent = &uproc_tbl[parentslot];
+        if (parent->children.count > 0) {
+            child = list_pop_node(&parent->children);
+        }
+    }
 
     quit(exit_code);
 
@@ -404,8 +399,10 @@ int semp_real(int semaphore) {
     sem_ptr sem = &sem_tbl[semaphore];
 
     if (sem->value == 0) {
-        waitingprocs++;
-        MboxReceive(uproc_tbl[semaphore].private_mbox, NULL, 0);
+        int wproc_slot = getpid() % MAXPROC;
+        uproc_ptr wproc = &uproc_tbl[wproc_slot];
+        list_add_node(&sem->waitingprocs, wproc);
+        MboxReceive(wproc->private_mbox, NULL, 0);
     }
 
     sem->value -= 1;
@@ -429,9 +426,9 @@ int semv_real(int semaphore) {
 
     sem->value += 1;
 
-    if (waitingprocs > 0) { /*************REPLACE WAITINGPROCS WITH ACTUAL LIST**********/
-        waitingprocs--;
-        MboxSend(uproc_tbl[semaphore].private_mbox, NULL, 0);
+    if (sem->waitingprocs.count > 0) {
+        uproc_ptr wproc = list_pop_node(&sem->waitingprocs);
+        MboxCondSend(wproc->private_mbox, NULL, 0);
     }
 
     return 0;
@@ -450,6 +447,12 @@ static void semfree(sysargs *args_ptr) {
 int semfree_real(int semaphore) {
 
     sem_ptr sem = &sem_tbl[semaphore];
+
+    while (sem->waitingprocs.count > 0) {
+        uproc_ptr wproc = list_pop_node(&sem->waitingprocs);
+        zap(wproc->pid);
+    }
+
     sem->value = -1;
     sem->id = -1;
     sem->status = STATUS_FREE;
@@ -457,3 +460,52 @@ int semfree_real(int semaphore) {
     return 0;
 
 } /* semfree_real */
+
+void list_add_node(List *list, void *list_node) {
+
+   node *new_node = (node *)list_node;
+
+   if (list->head == NULL) {
+      /* list is empty */
+      list->head = new_node;
+      list->tail = new_node;
+   } else if (((node *)list->head)->next == NULL) {
+      /* list has only 1 node - add to end */
+      ((node *)list->head)->next = new_node;
+      new_node->prev = list->head;
+      list->tail = new_node;
+   } else {
+      /* list has more than 1 node - add to end */
+      ((node *)list->tail)->next = new_node;
+      new_node->prev = list->tail;
+      list->tail = new_node;
+   }
+
+   list->count++;
+
+} /* list_add_node */
+
+void *list_pop_node(List *list) {
+
+   node *rm_node = (node *)list->head;
+
+   if (list->head == list->tail) {
+      /* list has only 1 node - restore pointers */
+      list->head = NULL;
+      list->tail = NULL;
+   } else {
+      /* list has more than 1 node - adjust pointers */
+      list->head = ((node *)list->head)->next;
+      ((node *)list->head)->prev = NULL;
+   }
+
+   list->count--;
+
+   /* ensure count is not out of bounds */
+   if (list->count < 0) {
+      list->count = 0;
+   }
+
+   return rm_node;
+
+} /* list_pop_node */
