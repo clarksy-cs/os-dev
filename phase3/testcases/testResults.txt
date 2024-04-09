@@ -454,7 +454,7 @@ starting test 18 ....
 start3(): started
 start3(): spawned process 5
 Child1(): starting, pid = 5
-Child2(): bet, pid = 6
+Child2(): starting, pid = 6
 Child2(): spawned process 7
 Child2(): spawned process 8
 Child2(): spawned process 9

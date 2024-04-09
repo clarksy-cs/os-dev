@@ -9,6 +9,7 @@
 
 #define STATUS_FREE        0
 #define STATUS_USED        1
+#define STATUS_KILL        2
 
 typedef struct userproc userproc;
 typedef struct userproc *uproc_ptr;

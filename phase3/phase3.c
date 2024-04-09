@@ -45,7 +45,6 @@ semaphore sem_tbl[MAXSEMS];
 
 /* global count variables */
 int next_sem_id = 0;
-int waitingprocs = 0;
 
 /* -------------------------- Functions ----------------------------------- */
 
@@ -137,6 +136,7 @@ static void semcreate(sysargs *args_ptr) {
 
     int value = (int)args_ptr->arg1;
     int sem_id = semcreate_real(value);
+
     args_ptr->arg1 = (void *)sem_id;
 
     if (sem_id == -1) {
@@ -172,7 +172,7 @@ int semcreate_real(int init_value) {
 
    /* initialize new sem */
    new_sem->id = next_sem_id;
-   new_sem->status  = STATUS_USED;
+   new_sem->status = STATUS_USED;
    new_sem->value = init_value;
 
    return new_sem->id;
@@ -192,7 +192,7 @@ int launch_usermode(char *arg) {
     MboxReceive(uproc_tbl[proc_slot].startup_mbox, NULL, 0);
 
     if (is_zapped()) {
-        quit(0);
+        quit(1);
     }
 
     /* set the user mode */
@@ -253,6 +253,7 @@ int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int p
     kidptr->pid = kidpid;            // get child pid
     kidptr->parentPID = getpid();    // get parent pid
     kidptr->entrypoint = func;       // pass launch_usermode function to call
+    strcpy(kidptr->name, name);      // pass name to child process
 
     list_add_node(&uproc_tbl[parent].children, kidptr);
 
@@ -357,7 +358,7 @@ static void timeofday(sysargs *args_ptr) {
 
 int gettimeofday_real(int *time) {
 
-    return sys_clock();
+    return (sys_clock() * 6 + 800) % 2400;
 
 } /* gettimeofday_real */
 
@@ -376,11 +377,6 @@ static void getPID(sysargs *arg_ptr) {
 int getPID_real(int *pid) {
     
     int cpid = getpid();
-
-    if (cpid < 0 || cpid >= MAXPROC) {
-        return -1;
-    }
-
     return cpid;
 
 } /* getPID_real */
@@ -406,6 +402,10 @@ int semp_real(int semaphore) {
     }
 
     sem->value -= 1;
+
+    if (sem->status == STATUS_KILL) {
+        terminate_real(1);
+    }
 
     return 0;
 
@@ -449,12 +449,18 @@ int semfree_real(int semaphore) {
     sem_ptr sem = &sem_tbl[semaphore];
 
     while (sem->waitingprocs.count > 0) {
-        uproc_ptr wproc = list_pop_node(&sem->waitingprocs);
-        zap(wproc->pid);
+        sem->status = STATUS_KILL;
+        semv_real(semaphore);
     }
 
     sem->value = -1;
     sem->id = -1;
+
+    if (sem->status == STATUS_KILL) {
+        sem->status = STATUS_FREE;
+        return 1;
+    }
+
     sem->status = STATUS_FREE;
 
     return 0;

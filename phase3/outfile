@@ -297,31 +297,31 @@ start3(): calling Spawn for Child1c
 Child1c(): starting, P'ing semaphore
 start3(): calling Spawn for Child2
 Child2(): starting, free'ing semaphore
+Child2(): done
 start3(): after spawn of Child2
 start3(): Parent done. Calling Terminate.
-check_deadlock: numProc is 8
-check_deadlock: processes still present, halting...
+All processes completed.
 
 starting test 10 ....
 
 start3(): started
 start3(): calling Spawn for Child1a
 Child1a(): starting
-Child1a(): current time = 67
-Child1a(): current time = 74
-Child1a(): current time = 81
+Child1a(): current time = 1202
+Child1a(): current time = 1244
+Child1a(): current time = 1286
 Child1a(): done
 start3(): calling Spawn for Child1b
 Child1b(): starting
-Child1b(): current time = 120
-Child1b(): current time = 127
-Child1b(): current time = 133
+Child1b(): current time = 1520
+Child1b(): current time = 1562
+Child1b(): current time = 1598
 Child1b(): done
 start3(): calling Spawn for Child1c
 Child1c(): starting
-Child1c(): current time = 175
-Child1c(): current time = 182
-Child1c(): current time = 190
+Child1c(): current time = 1850
+Child1c(): current time = 1892
+Child1c(): current time = 1940
 Child1c(): done
 start3(): calling Spawn for Child2
 start3(): Parent done. Calling Terminate.
@@ -357,29 +357,29 @@ starting test 12 ....
 start3(): started
 start3(): calling Spawn for Child1a
 Child1a(): starting
-Child1a(): current time of day = 67
+Child1a(): current time of day = 1202
 Child1a(): current CPU time = 20
-Child1a(): current time of day = 81
+Child1a(): current time of day = 1286
 Child1a(): current CPU time = 32
-Child1a(): current time of day = 95
+Child1a(): current time of day = 1370
 Child1a(): current CPU time = 49
 Child1a(): done
 start3(): calling Spawn for Child1b
 Child1b(): starting
-Child1b(): current time of day = 139
+Child1b(): current time of day = 1634
 Child1b(): current CPU time = 21
-Child1b(): current time of day = 154
+Child1b(): current time of day = 1724
 Child1b(): current CPU time = 37
-Child1b(): current time of day = 170
+Child1b(): current time of day = 1820
 Child1b(): current CPU time = 49
 Child1b(): done
 start3(): calling Spawn for Child1c
 Child1c(): starting
-Child1c(): current time of day = 218
+Child1c(): current time of day = 2108
 Child1c(): current CPU time = 19
-Child1c(): current time of day = 233
+Child1c(): current time of day = 2198
 Child1c(): current CPU time = 36
-Child1c(): current time of day = 249
+Child1c(): current time of day = 2294
 Child1c(): current CPU time = 51
 Child1c(): done
 start3(): calling Spawn for Child2
@@ -427,8 +427,11 @@ Child1(): starting
 start3(): fork 5
 Child2(): starting
 start3(): fork 6
-check_deadlock: numProc is 6
-check_deadlock: processes still present, halting...
+start3(): After SemFree with processes blocked
+start3(): status of quit child = 1
+start3(): status of quit child = 1
+start3(): Parent done
+All processes completed.
 
 starting test 17 ....
 
@@ -468,7 +471,7 @@ All processes completed.
 starting test 19 ....
 
 start3(): started
-start3(): elapsed time = 7
+start3(): elapsed time = 42
 All processes completed.
 
 starting test 20 ....
@@ -624,7 +627,7 @@ Child2(): spawned attempt failed, pid = -1
 Child2(): spawned attempt failed, pid = -1
 Child2(): Terminating me and all my children
 Child1(): spawned process 6
-Child2b(): starting, pid = -1
+Child2b(): starting, pid = 56
 Child2c(): starting the code for Child2c
 Child2b(): spawned process 57
 Child1(): spawned process 56
