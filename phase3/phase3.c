@@ -4,7 +4,6 @@
    College of Applied Science and Technology
    The University of Arizona
    CSCV 452
-
    ------------------------------------------------------------------------ */
 #include <stdlib.h>
 #include <string.h>
