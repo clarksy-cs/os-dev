@@ -283,7 +283,7 @@ starting test 08 ....
 
 start3(): started.  Calling SemCreate
 start3(): freeing one semaphore
-start3(): ERROR: last call to SemCreate should have returned 0, but did not
+start3(): Correct result from last call to SemCreate()
 All processes completed.
 
 starting test 09 ....

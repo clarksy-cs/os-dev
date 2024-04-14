@@ -112,34 +112,33 @@ static void nullsys3(sysargs *args_ptr) {
 
 int get_next_sem_id(void) {
 
-    int new_sem_id = -1;
-    int next_pos = next_sem_id % MAXSEMS;
-    int num_full = 0;
+    int found = -1;
 
-    /* iterate sem table for empty position */
-    while ((num_full < MAXSEMS) && sem_tbl[next_pos].status != STATUS_FREE) {
-        next_sem_id++;
-        next_pos = next_sem_id % MAXSEMS;
-        num_full++;
+    /* search for a free semaphore slot */
+    for (int i = 0; i < MAXSEMS; i++) {
+        if (sem_tbl[i].status == STATUS_FREE) {
+            found = i;  // if a free slot is found, store the index
+            break;      
+        }
     }
 
-    /* empty position found in sem table */
-    if (num_full < MAXSEMS) {
-        new_sem_id = next_sem_id++;
-        return new_sem_id;
+    if (found != -1) {
+        sem_tbl[found].status = STATUS_USED; // mark the found slot as used
+        return found; // return the index of the free slot found
+    } else {
+        return -1; // return -1 if no free slot is available
     }
 
-    return new_sem_id;
 } /* get_next_sem_id */
 
 static void semcreate(sysargs *args_ptr) {
 
-    int value = (int)args_ptr->arg1;
-    int sem_id = semcreate_real(value);
+    int value = (int)args_ptr->arg1;        // set value to arg1
+    int sem_id = semcreate_real(value);     // get sem_id
 
-    args_ptr->arg1 = (void *)sem_id;
+    args_ptr->arg1 = (void *)sem_id;        // pass sem_id to arg1
 
-    if (sem_id == -1) {
+    if (sem_id == -1) {                     // error handling
         args_ptr->arg4 = (void *)-1;
     } else {
         args_ptr->arg4 = (void *) 0;
@@ -218,6 +217,7 @@ static void spawn(sysargs *args_ptr) {
     int priority;
     int kidpid;
 
+    /* set parameters */
     func = args_ptr->arg1;
     arg = args_ptr->arg2;
     stack_size = (int)args_ptr->arg3;
@@ -308,14 +308,14 @@ void terminate_real(int exit_code) {
     uproc_ptr current = &uproc_tbl[proc_slot];
     uproc_ptr child, parent;
 
-    while (current->children.count > 0) {
-        child = list_pop_node(&current->children);
+    while (current->children.count > 0) {               // while current process has children
+        child = list_pop_node(&current->children);      // zap them
         zap(child->pid);
     }
 
     if (current->parentPID != -1) {
-        int parentslot = current->parentPID % MAXPROC;
-        parent = &uproc_tbl[parentslot];
+        int parentslot = current->parentPID % MAXPROC;  // if current has parent
+        parent = &uproc_tbl[parentslot];                // remove self from parent list of children
         if (parent->children.count > 0) {
             child = list_pop_node(&parent->children);
         }
@@ -330,8 +330,8 @@ static void cputime(sysargs *args_ptr){
     int *ptr = (int *)malloc(sizeof(int));
     int cpu;
 
-    cpu = cputime_real(ptr);
-    args_ptr->arg1 = (void *)cpu;
+    cpu = cputime_real(ptr);                // get cpu runtime
+    args_ptr->arg1 = (void *)cpu;           // set a arg1
 
     free(ptr);
 
@@ -341,6 +341,8 @@ int cputime_real(int *time) {
 
     *time = readtime();
 
+    return *time;
+
 } /* cputime_real */
 
 
@@ -349,8 +351,8 @@ static void timeofday(sysargs *args_ptr) {
     int *ptr = (int *)malloc(sizeof(int));
     int tod;
 
-    tod = gettimeofday_real(ptr);
-    args_ptr->arg1 = (void *)tod;
+    tod = gettimeofday_real(ptr);   // get magical time of day
+    args_ptr->arg1 = (void *)tod;   // set as arg1
 
     free(ptr);
 
@@ -358,7 +360,7 @@ static void timeofday(sysargs *args_ptr) {
 
 int gettimeofday_real(int *time) {
 
-    return (sys_clock() * 6 + 800) % 2400;
+    return (sys_clock() * 6 + 800) % 2400;  // magic
 
 } /* gettimeofday_real */
 
@@ -367,8 +369,8 @@ static void getPID(sysargs *arg_ptr) {
     int *ptr = (int *)malloc(sizeof(int));
     int pid;
 
-    pid = getPID_real(ptr);
-    arg_ptr->arg1 = (void *)pid;
+    pid = getPID_real(ptr);         // get current PID
+    arg_ptr->arg1 = (void *)pid;    // set as arg1
 
     free(ptr);
 
@@ -392,19 +394,19 @@ static void semp(sysargs *args_ptr) {
 
 int semp_real(int semaphore) {
 
-    sem_ptr sem = &sem_tbl[semaphore];
+    sem_ptr sem = &sem_tbl[semaphore];                  // set pointer to sem
 
-    if (sem->value == 0) {
-        int wproc_slot = getpid() % MAXPROC;
-        uproc_ptr wproc = &uproc_tbl[wproc_slot];
+    if (sem->value == 0) {                              // if we can't decriment
+        int wproc_slot = getpid() % MAXPROC;            // add waiting proc to list
+        uproc_ptr wproc = &uproc_tbl[wproc_slot];       // block with mboxreceive
         list_add_node(&sem->waitingprocs, wproc);
         MboxReceive(wproc->private_mbox, NULL, 0);
     }
 
     sem->value -= 1;
 
-    if (sem->status == STATUS_KILL) {
-        terminate_real(1);
+    if (sem->status == STATUS_KILL) {   // if sem was freed
+        terminate_real(1);              // terminate
     }
 
     return 0;
@@ -422,13 +424,13 @@ static void semv(sysargs *args_ptr) {
 
 int semv_real(int semaphore) {
 
-    sem_ptr sem = &sem_tbl[semaphore];
+    sem_ptr sem = &sem_tbl[semaphore];      // set pointer to sem
 
-    sem->value += 1;
+    sem->value += 1;                        // inc value
 
-    if (sem->waitingprocs.count > 0) {
-        uproc_ptr wproc = list_pop_node(&sem->waitingprocs);
-        MboxCondSend(wproc->private_mbox, NULL, 0);
+    if (sem->waitingprocs.count > 0) {                          // if proc waiting on sem
+        uproc_ptr wproc = list_pop_node(&sem->waitingprocs);    // get waiting proc
+        MboxCondSend(wproc->private_mbox, NULL, 0);             // unblock with mboxcondsend
     }
 
     return 0;
@@ -446,22 +448,22 @@ static void semfree(sysargs *args_ptr) {
 
 int semfree_real(int semaphore) {
 
-    sem_ptr sem = &sem_tbl[semaphore];
+    sem_ptr sem = &sem_tbl[semaphore];      // set pointer to sem
 
-    while (sem->waitingprocs.count > 0) {
-        sem->status = STATUS_KILL;
-        semv_real(semaphore);
+    while (sem->waitingprocs.count > 0) {   // while processes are waiting on sem
+        sem->status = STATUS_KILL;          // set kill status
+        semv_real(semaphore);               // dec to unblock processes
     }
 
     sem->value = -1;
     sem->id = -1;
 
-    if (sem->status == STATUS_KILL) {
-        sem->status = STATUS_FREE;
+    if (sem->status == STATUS_KILL) {   // if processes were waiting
+        sem->status = STATUS_FREE;      // set free status and return 1
         return 1;
     }
 
-    sem->status = STATUS_FREE;
+    sem->status = STATUS_FREE;          // set free status
 
     return 0;
 
