@@ -1,0 +1,10 @@
+
+int curtime = sys_clock();
+
+when checking queue: (every clock int)
+    if curtime >= timestamp then wake up
+    the moment it is not - break for efficiency 
+
+
+when assigning "sleep":
+    timestamp = curtime + 5 microseconds
