@@ -1,29 +1,45 @@
 #define DEBUG4 0
+#define TRUE   1
+#define FALSE  0
 
-typedef struct driver_proc * driver_proc_ptr;
-typedef struct disk_request * disk_request_ptr;
+typedef struct driver_proc driver_proc;
+typedef struct driver_proc * proc_ptr;
+
+typedef struct disk_request disk_request;
+typedef struct disk_request * req_ptr;
+
+typedef struct node {
+   void     *next;
+   void     *prev;
+} node;
+
+typedef struct List {
+   void     *head;
+   void     *tail;
+   int      count;
+} List;
 
 struct driver_proc {
-   driver_proc_ptr next_ptr;
-   driver_proc_ptr prev_ptr;
+   /* list management */
+   proc_ptr next_ptr;
+   proc_ptr prev_ptr;
+
+   /* used for disk requests */
+   req_ptr request;
 
    /* for sleep syscall */
    int   pid;
    int   wake_time;
    int   been_zapped;
-   int   sleep_mbox;
+   int   sleep_sem;
+};
 
-
-   /* used for disk requests */
+struct disk_request {
    int   operation;    /* DISK_READ, DISK_WRITE, DISK_SEEK, DISK_TRACKS */
    int   track_start;
    int   sector_start;
    int   num_sectors;
    void *disk_buf;
-};
-
-struct disk_request {
-
 };
 
 extern int debugflag4;
