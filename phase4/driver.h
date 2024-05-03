@@ -1,6 +1,8 @@
 #define DEBUG4 0
 #define TRUE   1
 #define FALSE  0
+#define STATUS_USED 1
+#define STATUS_FREE 0
 
 typedef struct driver_proc driver_proc;
 typedef struct driver_proc * proc_ptr;
@@ -32,6 +34,7 @@ struct driver_proc {
    int   wake_time;
    int   been_zapped;
    int   sleep_sem;
+   int   status;
 };
 
 struct disk_request {

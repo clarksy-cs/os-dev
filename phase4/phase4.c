@@ -18,6 +18,7 @@ static struct driver_proc proc_tbl[MAXPROC];
 List sleepingprocs;
 
 /* global variables */
+static int next_proc_slot = 0;
 static int diskpids[DISK_UNITS];
 static int num_tracks[DISK_UNITS];
 static int disk_sems[DISK_UNITS];
@@ -32,11 +33,14 @@ static void disk_read(sysargs *args_ptr);
 static void disk_write(sysargs *args_ptr);
 void list_add_node(List *list, void *list_node);
 void *list_pop_node(List *list);
+void clear_entry(int target);
+int  get_next_proc_slot(void);
 
 int start3(char *arg) {
 
     char name[128], termbuf[10], buf[32];
-    int	 i, clockPID, pid, status;
+    int	 i, clockPID, pid, status, slot;
+    proc_ptr newproc, target;
     /*
      * Check kernel mode here.
      */
@@ -55,6 +59,8 @@ int start3(char *arg) {
         proc_tbl[i].sleep_sem = semcreate_real(0);
         proc_tbl[i].wake_time = -1;
         proc_tbl[i].been_zapped = FALSE;
+        proc_tbl[i].status = STATUS_FREE;
+
     }
 
     /* initialize disk semaphores */
@@ -74,6 +80,22 @@ int start3(char *arg) {
         console("start3(): Can't create clock driver\n");
         halt(1);
     }
+
+    /* get slot in proc table */
+    next_proc_slot = get_next_proc_slot();
+
+    /* if table is full */
+    if (next_proc_slot == -1) {
+        return -1;
+    }
+
+    /* store driver process in proc table */
+    slot = next_proc_slot % MAXPROC;
+    newproc = &proc_tbl[slot];
+
+    newproc->pid = clockPID;
+    newproc->status = STATUS_USED;
+
     /*
      * Wait for the clock driver to start. The idea is that ClockDriver
      * will V the semaphore "running" once it is running.
@@ -96,6 +118,21 @@ int start3(char *arg) {
             console("start3(): Can't create disk driver %d\n", i);
             halt(1);
         }
+
+        /* get slot in proc table */
+        next_proc_slot = get_next_proc_slot();
+
+        /* if table is full */
+        if (next_proc_slot == -1) {
+            return -1;
+        }
+
+        /* store driver process in proc table */
+        slot = next_proc_slot % MAXPROC;
+        newproc = &proc_tbl[slot];
+
+        newproc->pid = diskpids[i];
+        newproc->status = STATUS_USED;
     }
     semp_real(running);
     semp_real(running);
@@ -111,11 +148,36 @@ int start3(char *arg) {
     pid = spawn_real("start4", start4, NULL,  8 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
-    /*
-     * Zap the device drivers
-     */
+    /* zap the device drivers */
     zap(clockPID);  // clock driver
-    join(&status); /* for the Clock Driver */
+    clear_entry(clockPID);
+    join(&status); 
+
+    for (i = 0; i < MAXPROC; i++) {
+        if (proc_tbl[i].pid == diskpids[0]) {
+            target = &proc_tbl[i];
+            target->been_zapped = TRUE; // indicate zapped for disk driver
+            semv_real(disk_sems[0]);
+        }
+        if (proc_tbl[i].pid == diskpids[1]) {
+            target = &proc_tbl[i];
+            target->been_zapped = TRUE; // indicate zapped for disk driver
+            semv_real(disk_sems[1]);
+        }
+    }
+
+    /* zap any user-level processes remaining */
+    for (i = 0; i < MAXPROC; i++) {
+        if (proc_tbl[i].pid == STATUS_USED) {
+            zap(proc_tbl[i].pid);
+            clear_entry(proc_tbl[i].pid);
+        }
+    }
+
+    join(&status);
+    join(&status);
+
+    terminate_real(0);
 }
 
 static int ClockDriver(char *arg) {
@@ -123,9 +185,7 @@ static int ClockDriver(char *arg) {
     int result, status, curtime;
     proc_ptr waking_proc;
 
-    /*
-     * Let the parent know we are running and enable interrupts.
-     */
+    /* let the parent know we are running and enable interrupts */
     semv_real(running);
     psr_set(psr_get() | PSR_CURRENT_INT);
 
@@ -142,9 +202,10 @@ static int ClockDriver(char *arg) {
         while (waking_proc != NULL) {
             /* wake up processes */
             if (waking_proc->wake_time <= curtime) {
-                waking_proc = list_pop_node(&sleepingprocs);
-                semv_real(waking_proc->sleep_sem);
-                waking_proc = waking_proc->next_ptr;
+                waking_proc = list_pop_node(&sleepingprocs);    // get first ready proc
+                semv_real(waking_proc->sleep_sem);              // wake up by inc semaphore
+                clear_entry(waking_proc->pid);                  // clear proc table entry
+                waking_proc = sleepingprocs.head;               // get next ready proc
             } else {
                 /* break when wake_time exceeds current time */
                 waking_proc = NULL;
@@ -155,7 +216,7 @@ static int ClockDriver(char *arg) {
 
 static int DiskDriver(char *arg) {
 
-    int track_count, result, status, unit;
+    int track_count, result, status, unit, slot;
     device_request my_request;
     proc_ptr current_req;
 
@@ -189,19 +250,53 @@ static int DiskDriver(char *arg) {
     /* signal start3 that we are running */
     semv_real(running);
 
-    //while(1) {
-    //    semp_real(disk_sems[unit]);
-    //}
+    while(1) { // TRY USING GETPID HERE AND TERMINATE IF ZAPPED
+        int target = diskpids[unit];
+        for (int i = 0; i < MAXPROC; i++) {
+            current_req = &proc_tbl[i];
+            if (current_req->pid == target && current_req->been_zapped) {
+                clear_entry(current_req->pid);
+                terminate_real(0);
+            }
+        }
+        semp_real(disk_sems[unit]);
+    }
 
     return 0;
 }
 
 /* sleep system call */
 static void sleep_sys(sysargs *args_ptr) {
-    int sleeptime;
+    int sleeptime, slot;
+    proc_ptr callingproc;
 
     sleeptime = (int)args_ptr->arg1;
-    
+
+    /* get next proc slot */
+    next_proc_slot = get_next_proc_slot();
+
+    /* if table is full */
+    if (next_proc_slot == -1) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* store driver process in proc table */
+    slot = next_proc_slot % MAXPROC;
+    callingproc = &proc_tbl[slot];
+
+    callingproc->pid = getpid() % MAXPROC;
+    callingproc->status = STATUS_USED;
+    callingproc->wake_time = (sleeptime * 1000000) + sys_clock();
+
+    /* add process to sleepinglist */
+    list_add_node(&sleepingprocs, callingproc);
+
+    /* wait for semaphore */
+    semp_real(callingproc->sleep_sem);
+
+    /* return result */
+    args_ptr->arg4 = (int)0;    
 }
 
 /* disk size system call */
@@ -226,13 +321,42 @@ static void disk_size(sysargs *args_ptr) {
 
 /* disk read system call */
 static void disk_read(sysargs *args_ptr) {
+    int sectors, track, first, unit;
 
+    sectors = (int)args_ptr->arg2;
+    track   = (int)args_ptr->arg3;
+    first   = (int)args_ptr->arg4;
+    unit    = (int)args_ptr->arg5;
 
+    /* check if unit is out of range */
+    if (unit < 0 || unit >= DISK_UNITS) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    args_ptr->arg1 = (int)0;
+    args_ptr->arg4 = (int)0;
 }
 
 /* disk write system call */
 static void disk_write(sysargs *args_ptr) {
+    int sectors, track, first, unit;
+    char *disk_buffer;
 
+    disk_buffer  = args_ptr->arg1;
+    sectors = (int)args_ptr->arg2;
+    track   = (int)args_ptr->arg3;
+    first   = (int)args_ptr->arg4;
+    unit    = (int)args_ptr->arg5;
+
+    /* check if unit is out of range */
+    if (unit < 0 || unit >= DISK_UNITS) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    args_ptr->arg1 = (int)0;
+    args_ptr->arg4 = (int)0;
 
 }
 
@@ -303,3 +427,36 @@ void *list_pop_node(List *list) {
     return rm_node;
 
 } /* list_pop_node */
+
+void clear_entry(int target) {
+
+    for (int i = 0; i < MAXPROC; i++) {
+        if (proc_tbl[i].pid == target) {
+            proc_tbl[i].pid = -1;
+            proc_tbl[i].status = STATUS_FREE;
+            proc_tbl[i].wake_time = -1;
+            proc_tbl[i].been_zapped = FALSE;
+        }
+    }
+
+}
+
+
+int  get_next_proc_slot(void) {
+    int found = -1;
+
+    /* search for a free proc slot */
+    for (int i = 0; i < MAXPROC; i++) {
+        if (proc_tbl[i].status == STATUS_FREE) {
+            found = i;  // if a free slot is found, store the index
+            break;      
+        }
+    }
+
+    if (found != -1) {
+        proc_tbl[found].status = STATUS_USED; // mark the found slot as used
+        return found; // return the index of the free slot found
+    } else {
+        return -1; // return -1 if no free slot is available
+    }
+}
