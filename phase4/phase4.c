@@ -32,6 +32,7 @@ static void sleep_sys(sysargs  *args_ptr);
 static void disk_size(sysargs  *args_ptr);
 static void disk_read(sysargs  *args_ptr);
 static void disk_write(sysargs *args_ptr);
+void list_add_snode(List *list, void *list_node);
 void list_add_node(List *list, void *list_node);
 void *list_pop_node(List *list);
 void clear_entry(int target);
@@ -209,8 +210,7 @@ static int ClockDriver(char *arg) {
 
 static int DiskDriver(char *arg) {
 
-    int i, track_count, result, status, unit, slot; 
-    int current_track = 0;
+    int i, track_count, result, status, unit, slot, current_track;
     device_request my_request;
     proc_ptr current_req;
 
@@ -252,8 +252,9 @@ static int DiskDriver(char *arg) {
             /* get next request */
             current_req = list_pop_node(&disk_requests[unit]);
 
-            /* init loop counter */
+            /* init loop and track counter */
             i = 0;
+            current_track = 0;
 
             /* read all sectors in a request */
             while(current_req->request.sectors_read != current_req->request.num_sectors) {
@@ -333,7 +334,7 @@ static void sleep_sys(sysargs *args_ptr) {
     callingproc->wake_time = (sleeptime * 1000000) + sys_clock();
 
     /* add process to sleepinglist */
-    list_add_node(&sleepingprocs, callingproc);
+    list_add_snode(&sleepingprocs, callingproc);
 
     /* wait for semaphore */
     semp_real(callingproc->sleep_sem);
@@ -484,7 +485,7 @@ static void disk_write(sysargs *args_ptr) {
     args_ptr->arg4 = (int)0;
 }
 
-void list_add_node(List *list, void *list_node) {
+void list_add_snode(List *list, void *list_node) {
 
     node *new_node = (node *)list_node;
 
@@ -524,6 +525,30 @@ void list_add_node(List *list, void *list_node) {
     }
 
     list->count++;
+
+} /* list_add_snode */
+
+void list_add_node(List *list, void *list_node) {
+
+   node *new_node = (node *)list_node;
+
+   if (list->head == NULL) {
+      /* list is empty */
+      list->head = new_node;
+      list->tail = new_node;
+   } else if (((node *)list->head)->next == NULL) {
+      /* list has only 1 node - add to end */
+      ((node *)list->head)->next = new_node;
+      new_node->prev = list->head;
+      list->tail = new_node;
+   } else {
+      /* list has more than 1 node - add to end */
+      ((node *)list->tail)->next = new_node;
+      new_node->prev = list->tail;
+      list->tail = new_node;
+   }
+
+   list->count++;
 
 } /* list_add_node */
 

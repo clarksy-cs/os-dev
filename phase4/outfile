@@ -179,20 +179,20 @@ going to write track 1
 going to write track 6
 after writing track 5
 process 9 quit with status 2
-after writing track 6
-process 16 quit with status 9
-after writing track 1
-process 15 quit with status 8
-after writing track 2
-process 14 quit with status 7
-after writing track 7
-process 13 quit with status 6
-after writing track 0
-process 12 quit with status 5
-after writing track 9
-process 11 quit with status 4
 after writing track 3
 process 10 quit with status 3
+after writing track 9
+process 11 quit with status 4
+after writing track 0
+process 12 quit with status 5
+after writing track 7
+process 13 quit with status 6
+after writing track 2
+process 14 quit with status 7
+after writing track 1
+process 15 quit with status 8
+after writing track 6
+process 16 quit with status 9
 start4(): done 33
 All processes completed.
 
@@ -211,20 +211,20 @@ going to write to sector 1
 going to write to sector 6
 after writing to sector 5
 process 9 quit with status 2
-after writing to sector 6
-process 16 quit with status 9
-after writing to sector 1
-process 15 quit with status 8
-after writing to sector 2
-process 14 quit with status 7
-after writing to sector 7
-process 13 quit with status 6
-after writing to sector 0
-process 12 quit with status 5
-after writing to sector 9
-process 11 quit with status 4
 after writing to sector 3
 process 10 quit with status 3
+after writing to sector 9
+process 11 quit with status 4
+after writing to sector 0
+process 12 quit with status 5
+after writing to sector 7
+process 13 quit with status 6
+after writing to sector 2
+process 14 quit with status 7
+after writing to sector 1
+process 15 quit with status 8
+after writing to sector 6
+process 16 quit with status 9
 start4(): done 33
 All processes completed.
 
@@ -243,14 +243,14 @@ ubiq0: after writing to track 5
 process 9 quit with status 2
 ubiq1: after writing to track 4
 process 12 quit with status 5
-ubiq0: after writing to track 9
-process 11 quit with status 4
-ubiq1: after writing to track 8
-process 14 quit with status 7
 ubiq0: after writing to track 3
 process 10 quit with status 3
 ubiq1: after writing to track 2
 process 13 quit with status 6
+ubiq0: after writing to track 9
+process 11 quit with status 4
+ubiq1: after writing to track 8
+process 14 quit with status 7
 start4(): done 31
 All processes completed.
 
@@ -279,11 +279,11 @@ ChildDW0(): A wonderful message to put on the disk...
 ChildR1(): DiskRead returned status = 0
 ChildR1(): disk_buf_B contains:
 ChildDW1(): A wonderful message to put on the disk...
-ChildS(4): After sleeping 1 seconds, diff in sys_clock is 1049795
-ChildS(3): After sleeping 2 seconds, diff in sys_clock is 2049840
-ChildS(2): After sleeping 3 seconds, diff in sys_clock is 3049882
-ChildS(1): After sleeping 4 seconds, diff in sys_clock is 4049929
-ChildS(0): After sleeping 5 seconds, diff in sys_clock is 5049969
+ChildS(4): After sleeping 1 seconds, diff in sys_clock is 1049797
+ChildS(3): After sleeping 2 seconds, diff in sys_clock is 2049839
+ChildS(2): After sleeping 3 seconds, diff in sys_clock is 3049888
+ChildS(1): After sleeping 4 seconds, diff in sys_clock is 4049925
+ChildS(0): After sleeping 5 seconds, diff in sys_clock is 5049971
 start4(): done.
 All processes completed.
 
@@ -302,18 +302,18 @@ ubiq1: going to write to track 4
 ubiq1: going to write to track 7
 ubiq1: going to write to track 11
 ubiq1: going to write to track 2
-ubiq1: after writing to track 2
-process 16 quit with status 3
-ubiq1: after writing to track 11
-process 15 quit with status 7
-ubiq1: after writing to track 7
-process 14 quit with status 7
-ubiq1: after writing to track 4
-process 13 quit with status 5
-ubiq1: after writing to track 3
-process 12 quit with status 4
 ubiq1: after writing to track 15
 process 11 quit with status 7
+ubiq1: after writing to track 3
+process 12 quit with status 4
+ubiq1: after writing to track 4
+process 13 quit with status 5
+ubiq1: after writing to track 7
+process 14 quit with status 7
+ubiq1: after writing to track 11
+process 15 quit with status 7
+ubiq1: after writing to track 2
+process 16 quit with status 3
 start4(): done 48
 Child1 quit with status 9
 All processes completed.
