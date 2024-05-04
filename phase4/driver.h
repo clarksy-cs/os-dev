@@ -21,28 +21,34 @@ typedef struct List {
    int      count;
 } List;
 
+struct disk_request {
+   int   operation;    /* DISK_READ, DISK_WRITE, DISK_SEEK, DISK_TRACKS */
+   int   track_start;
+   int   current_track;
+   int   num_sectors;
+   int   sector_start;
+   int   sector_count;
+   int   current_sector;
+   int   sectors_read;
+
+   void *disk_buffer;
+};
+
 struct driver_proc {
    /* list management */
    proc_ptr next_ptr;
    proc_ptr prev_ptr;
 
    /* used for disk requests */
-   req_ptr request;
+   disk_request request;
 
    /* for sleep syscall */
    int   pid;
    int   wake_time;
    int   been_zapped;
    int   sleep_sem;
+   int   disk_sem;
    int   status;
-};
-
-struct disk_request {
-   int   operation;    /* DISK_READ, DISK_WRITE, DISK_SEEK, DISK_TRACKS */
-   int   track_start;
-   int   sector_start;
-   int   num_sectors;
-   void *disk_buf;
 };
 
 extern int debugflag4;

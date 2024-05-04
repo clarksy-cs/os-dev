@@ -16,6 +16,7 @@ static struct driver_proc proc_tbl[MAXPROC];
 
 /* sleeping processes */
 List sleepingprocs;
+List disk_requests[2];
 
 /* global variables */
 static int next_proc_slot = 0;
@@ -27,9 +28,9 @@ static int running; /*semaphore to synchronize drivers and start3*/
 /* prototypes */
 static int	ClockDriver(char *);
 static int	DiskDriver(char *);
-static void sleep_sys(sysargs *args_ptr);
-static void disk_size(sysargs *args_ptr);
-static void disk_read(sysargs *args_ptr);
+static void sleep_sys(sysargs  *args_ptr);
+static void disk_size(sysargs  *args_ptr);
+static void disk_read(sysargs  *args_ptr);
 static void disk_write(sysargs *args_ptr);
 void list_add_node(List *list, void *list_node);
 void *list_pop_node(List *list);
@@ -57,9 +58,19 @@ int start3(char *arg) {
     for (int i = 0; i < MAXPROC; i++) {
         proc_tbl[i].pid = -1;
         proc_tbl[i].sleep_sem = semcreate_real(0);
+        proc_tbl[i].disk_sem  = semcreate_real(0);
         proc_tbl[i].wake_time = -1;
         proc_tbl[i].been_zapped = FALSE;
         proc_tbl[i].status = STATUS_FREE;
+        proc_tbl[i].request.operation = -1;
+        proc_tbl[i].request.disk_buffer  = NULL;
+        proc_tbl[i].request.num_sectors  = -1;
+        proc_tbl[i].request.track_start  = -1;
+        proc_tbl[i].request.sector_start = -1;
+        proc_tbl[i].request.current_sector = 0;
+        proc_tbl[i].request.sectors_read = 0;
+        proc_tbl[i].request.current_track = 0;
+        proc_tbl[i].request.sector_count = 0;
 
     }
 
@@ -153,31 +164,13 @@ int start3(char *arg) {
     clear_entry(clockPID);
     join(&status); 
 
-    for (i = 0; i < MAXPROC; i++) {
-        if (proc_tbl[i].pid == diskpids[0]) {
-            target = &proc_tbl[i];
-            target->been_zapped = TRUE; // indicate zapped for disk driver
-            semv_real(disk_sems[0]);
-        }
-        if (proc_tbl[i].pid == diskpids[1]) {
-            target = &proc_tbl[i];
-            target->been_zapped = TRUE; // indicate zapped for disk driver
-            semv_real(disk_sems[1]);
-        }
+    /* release sems to terminate disk drivers */
+    for (i = 0; i < DISK_UNITS; i++) {
+        semfree_real(disk_sems[i]);
+        join(&status);
     }
 
-    /* zap any user-level processes remaining */
-    for (i = 0; i < MAXPROC; i++) {
-        if (proc_tbl[i].pid == STATUS_USED) {
-            zap(proc_tbl[i].pid);
-            clear_entry(proc_tbl[i].pid);
-        }
-    }
-
-    join(&status);
-    join(&status);
-
-    terminate_real(0);
+    return(0);
 }
 
 static int ClockDriver(char *arg) {
@@ -216,7 +209,8 @@ static int ClockDriver(char *arg) {
 
 static int DiskDriver(char *arg) {
 
-    int track_count, result, status, unit, slot;
+    int i, track_count, result, status, unit, slot; 
+    int current_track = 0;
     device_request my_request;
     proc_ptr current_req;
 
@@ -226,7 +220,7 @@ static int DiskDriver(char *arg) {
         console("DiskDriver(%d): started\n", unit);
     }
 
-    /* Get the number of tracks for this disk */
+    /* get the number of tracks for this disk */
     my_request.opr  = DISK_TRACKS;
     my_request.reg1 = &track_count;
 
@@ -244,22 +238,64 @@ static int DiskDriver(char *arg) {
 
     num_tracks[unit] = track_count;
 
-    // if (DEBUG4 && debugflag4)
-    //     console("DiskDriver(%d): tracks = %d\n", unit, num_tracks[unit]);
+    if (DEBUG4 && debugflag4)
+        console("DiskDriver(%d): tracks = %d\n", unit, num_tracks[unit]);
 
     /* signal start3 that we are running */
     semv_real(running);
 
-    while(1) { // TRY USING GETPID HERE AND TERMINATE IF ZAPPED
-        int target = diskpids[unit];
-        for (int i = 0; i < MAXPROC; i++) {
-            current_req = &proc_tbl[i];
-            if (current_req->pid == target && current_req->been_zapped) {
-                clear_entry(current_req->pid);
-                terminate_real(0);
-            }
-        }
+    while(!is_zapped()) {
+
         semp_real(disk_sems[unit]);
+
+        if (disk_requests[unit].count > 0) {
+            /* get next request */
+            current_req = list_pop_node(&disk_requests[unit]);
+
+            /* init loop counter */
+            i = 0;
+
+            /* read all sectors in a request */
+            while(current_req->request.sectors_read != current_req->request.num_sectors) {
+
+                /* check arm position and adjust */
+                if (current_track != current_req->request.track_start) {
+                    my_request.opr  = DISK_SEEK;
+                    my_request.reg1 = current_track = current_req->request.track_start;
+
+                    result = device_output(DISK_DEV, unit, &my_request);
+
+                    if (result != DEV_OK) {
+                        console("DiskDriver %d: did not get DEV_OK on DISK_TRACKS call\n", unit);
+                        console("DiskDriver %d: is the file disk%d present???\n", unit, unit);
+                        halt(1);
+                    }
+
+                    waitdevice(DISK_DEV, unit, &status);
+                }
+
+                /* read or write to sector */
+                my_request.opr  = current_req->request.operation;
+                my_request.reg1 = current_req->request.sector_start + i;
+                my_request.reg2 = current_req->request.disk_buffer + i * DISK_SECTOR_SIZE;
+
+                result = device_output(DISK_DEV, unit, &my_request);
+
+                if (result != DEV_OK) {
+                    console("DiskDriver %d: did not get DEV_OK on DISK_TRACKS call\n", unit);
+                    console("DiskDriver %d: is the file disk%d present???\n", unit, unit);
+                    halt(1);
+                }
+
+                waitdevice(DISK_DEV, unit, &status);
+
+                /* track sectors read */
+                i++;
+                current_req->request.sectors_read++;
+            }
+
+            semv_real(current_req->disk_sem);
+        }
     }
 
     return 0;
@@ -321,12 +357,10 @@ static void disk_size(sysargs *args_ptr) {
 
 /* disk read system call */
 static void disk_read(sysargs *args_ptr) {
-    int sectors, track, first, unit;
+    int unit, slot;
+    proc_ptr callingproc;
 
-    sectors = (int)args_ptr->arg2;
-    track   = (int)args_ptr->arg3;
-    first   = (int)args_ptr->arg4;
-    unit    = (int)args_ptr->arg5;
+    unit = (int)args_ptr->arg5;
 
     /* check if unit is out of range */
     if (unit < 0 || unit >= DISK_UNITS) {
@@ -334,20 +368,60 @@ static void disk_read(sysargs *args_ptr) {
         return;
     }
 
+    /* check if track start is out of range */
+    if ((int)args_ptr->arg3 < 0 || (int)args_ptr->arg3 > DISK_TRACK_SIZE) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* check if sector start is out of range */
+    if ((int)args_ptr->arg4 < 0 || (int)args_ptr->arg4 > DISK_TRACK_SIZE) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* get next proc slot */
+    next_proc_slot = get_next_proc_slot();
+
+    /* if table is full */
+    if (next_proc_slot == -1) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* store driver process in proc table */
+    slot = next_proc_slot % MAXPROC;
+    callingproc = &proc_tbl[slot];
+
+    /* set up process */
+    callingproc->pid = getpid();
+    callingproc->status = STATUS_USED;
+    callingproc->request.operation = (int)DISK_READ;
+    callingproc->request.disk_buffer  = args_ptr->arg1;
+    callingproc->request.num_sectors  = (int)args_ptr->arg2;
+    callingproc->request.track_start  = (int)args_ptr->arg3;
+    callingproc->request.sector_start = (int)args_ptr->arg4;
+
+    /* add to disk request queue */
+    list_add_node(&disk_requests[unit], callingproc);
+
+    /* wake up disk driver */
+    semv_real(disk_sems[unit]);
+
+    /* block on private sem */
+    semp_real(callingproc->disk_sem);
+
+    /* return values */
     args_ptr->arg1 = (int)0;
     args_ptr->arg4 = (int)0;
 }
 
 /* disk write system call */
 static void disk_write(sysargs *args_ptr) {
-    int sectors, track, first, unit;
-    char *disk_buffer;
+    int unit, slot;
+    proc_ptr callingproc;
 
-    disk_buffer  = args_ptr->arg1;
-    sectors = (int)args_ptr->arg2;
-    track   = (int)args_ptr->arg3;
-    first   = (int)args_ptr->arg4;
-    unit    = (int)args_ptr->arg5;
+    unit = (int)args_ptr->arg5;
 
     /* check if unit is out of range */
     if (unit < 0 || unit >= DISK_UNITS) {
@@ -355,9 +429,52 @@ static void disk_write(sysargs *args_ptr) {
         return;
     }
 
+    /* check if track start is out of range */
+    if ((int)args_ptr->arg3 < 0 || (int)args_ptr->arg3 > DISK_TRACK_SIZE) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* check if sector start is out of range */
+    if ((int)args_ptr->arg4 < 0 || (int)args_ptr->arg4 > DISK_TRACK_SIZE) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* get next proc slot */
+    next_proc_slot = get_next_proc_slot();
+
+    /* if table is full */
+    if (next_proc_slot == -1) {
+        args_ptr->arg4 = (int)-1;
+        return;
+    }
+
+    /* store driver process in proc table */
+    slot = next_proc_slot % MAXPROC;
+    callingproc = &proc_tbl[slot];
+
+    /* set up process */
+    callingproc->pid = getpid();
+    callingproc->status = STATUS_USED;
+    callingproc->request.operation = (int)DISK_WRITE;
+    callingproc->request.disk_buffer  = args_ptr->arg1;
+    callingproc->request.num_sectors  = (int)args_ptr->arg2;
+    callingproc->request.track_start  = (int)args_ptr->arg3;
+    callingproc->request.sector_start = (int)args_ptr->arg4;
+
+    /* add to disk request queue */
+    list_add_node(&disk_requests[unit], callingproc);
+
+    /* wake up disk driver */
+    semv_real(disk_sems[unit]);
+
+    /* block on private sem */
+    semp_real(callingproc->disk_sem);
+
+    /* return values */
     args_ptr->arg1 = (int)0;
     args_ptr->arg4 = (int)0;
-
 }
 
 void list_add_node(List *list, void *list_node) {
@@ -436,6 +553,17 @@ void clear_entry(int target) {
             proc_tbl[i].status = STATUS_FREE;
             proc_tbl[i].wake_time = -1;
             proc_tbl[i].been_zapped = FALSE;
+            proc_tbl[i].request.operation = -1;
+            proc_tbl[i].request.disk_buffer  = NULL;
+            proc_tbl[i].request.num_sectors  = -1;
+            proc_tbl[i].request.track_start  = -1;
+            proc_tbl[i].request.sector_start = -1;
+            proc_tbl[i].request.current_sector = 0;
+            proc_tbl[i].request.sectors_read = 0;
+            proc_tbl[i].request.current_track = 0;
+            proc_tbl[i].request.sector_count = 0;
+            semfree_real(proc_tbl[i].sleep_sem);
+            semfree_real(proc_tbl[i].disk_sem);
         }
     }
 
