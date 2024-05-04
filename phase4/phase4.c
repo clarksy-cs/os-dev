@@ -277,7 +277,8 @@ static int DiskDriver(char *arg) {
                 /* read or write to sector */
                 my_request.opr  = current_req->request.operation;
                 my_request.reg1 = current_req->request.sector_start + i;
-                my_request.reg2 = current_req->request.disk_buffer + i * DISK_SECTOR_SIZE;
+                my_request.reg2 = current_req->request.disk_buffer + 
+                current_req->request.sectors_read * DISK_SECTOR_SIZE;
 
                 result = device_output(DISK_DEV, unit, &my_request);
 
@@ -292,6 +293,12 @@ static int DiskDriver(char *arg) {
                 /* track sectors read */
                 i++;
                 current_req->request.sectors_read++;
+
+                if (current_req->request.sector_start >= 15) {
+                    current_track = ++current_req->request.track_start;
+                    current_req->request.sector_start = 0;
+                    i = 0;
+                }
             }
 
             semv_real(current_req->disk_sem);
@@ -562,8 +569,8 @@ void clear_entry(int target) {
             proc_tbl[i].request.sectors_read = 0;
             proc_tbl[i].request.current_track = 0;
             proc_tbl[i].request.sector_count = 0;
-            semfree_real(proc_tbl[i].sleep_sem);
-            semfree_real(proc_tbl[i].disk_sem);
+            //semfree_real(proc_tbl[i].sleep_sem);
+            //semfree_real(proc_tbl[i].disk_sem);
         }
     }
 

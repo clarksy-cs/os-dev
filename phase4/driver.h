@@ -30,6 +30,7 @@ struct disk_request {
    int   sector_count;
    int   current_sector;
    int   sectors_read;
+   int   wrapped;
 
    void *disk_buffer;
 };
