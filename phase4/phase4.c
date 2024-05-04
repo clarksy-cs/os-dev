@@ -43,19 +43,15 @@ int start3(char *arg) {
     char name[128], termbuf[10], buf[32];
     int	 i, clockPID, pid, status, slot;
     proc_ptr newproc, target;
-    /*
-     * Check kernel mode here.
-     */
 
-    /* Assignment system call handlers */
+    /* assign system call handlers */
     sys_vec[SYS_SLEEP]     = sleep_sys;
     sys_vec[SYS_DISKSIZE]  = disk_size;
     sys_vec[SYS_DISKREAD]  = disk_read;
     sys_vec[SYS_DISKWRITE] = disk_write;
-    //more for this phase's system call handlings
 
 
-    /* Initialize the phase 4 process table */
+    /* initialize the phase 4 process table */
     for (int i = 0; i < MAXPROC; i++) {
         proc_tbl[i].pid = -1;
         proc_tbl[i].sleep_sem = semcreate_real(0);
@@ -80,14 +76,11 @@ int start3(char *arg) {
         disk_sems[i] = semcreate_real(0);
     }
 
-    /*
-     * Create clock device driver 
-     * I am assuming a semaphore here for coordination.  A mailbox can
-     * be used instead -- your choice.
-     */
+    /* create clock device driver and semaphore for syncronization */
     running = semcreate_real(0);
     clockPID = fork1("Clock driver", ClockDriver, NULL, USLOSS_MIN_STACK, 2);
 
+    /* error handling */
     if (clockPID < 0) {
         console("start3(): Can't create clock driver\n");
         halt(1);
@@ -96,7 +89,7 @@ int start3(char *arg) {
     /* get slot in proc table */
     next_proc_slot = get_next_proc_slot();
 
-    /* if table is full */
+    /* if table is full return -1 */
     if (next_proc_slot == -1) {
         return -1;
     }
@@ -105,27 +98,20 @@ int start3(char *arg) {
     slot = next_proc_slot % MAXPROC;
     newproc = &proc_tbl[slot];
 
+    /* set up process */
     newproc->pid = clockPID;
     newproc->status = STATUS_USED;
 
-    /*
-     * Wait for the clock driver to start. The idea is that ClockDriver
-     * will V the semaphore "running" once it is running.
-     */
-
+    /* wait for the clock driver to start */
     semp_real(running);
 
-    /*
-     * Create the disk device drivers here.  You may need to increase
-     * the stack size depending on the complexity of your
-     * driver, and perhaps do something with the pid returned.
-     */
-
+    /* create disk drivers and initialize disk drivers */
     for (i = 0; i < DISK_UNITS; i++) {
         sprintf(buf, "%d", i);
         sprintf(name, "DiskDriver%d", i);
         diskpids[i] = fork1(name, DiskDriver, buf, USLOSS_MIN_STACK, 2);
 
+        /* error handling */
         if (diskpids[i] < 0) {
             console("start3(): Can't create disk driver %d\n", i);
             halt(1);
@@ -143,32 +129,29 @@ int start3(char *arg) {
         slot = next_proc_slot % MAXPROC;
         newproc = &proc_tbl[slot];
 
+        /* set up process */
         newproc->pid = diskpids[i];
         newproc->status = STATUS_USED;
     }
+
+    /* wait on disk drivers */
     semp_real(running);
     semp_real(running);
 
 
-    /*
-     * Create first user-level process and wait for it to finish.
-     * These are lower-case because they are not system calls;
-     * system calls cannot be invoked from kernel mode.
-     * I'm assuming kernel-mode versions of the system calls
-     * with lower-case names.
-     */
+    /* create first user-level process and wait for it to finish */
     pid = spawn_real("start4", start4, NULL,  8 * USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
     /* zap the device drivers */
-    zap(clockPID);  // clock driver
-    clear_entry(clockPID);
-    join(&status); 
+    zap(clockPID);          // clock driver
+    clear_entry(clockPID);  // clear process table entry
+    join(&status);          // join with children
 
     /* release sems to terminate disk drivers */
     for (i = 0; i < DISK_UNITS; i++) {
         semfree_real(disk_sems[i]);
-        join(&status);
+        join(&status); 
     }
 
     return(0);
@@ -184,6 +167,7 @@ static int ClockDriver(char *arg) {
     psr_set(psr_get() | PSR_CURRENT_INT);
 
     while(!is_zapped()) {
+
 	    result = waitdevice(CLOCK_DEV, 0, &status);
 
 	    if (result != 0) {
@@ -191,10 +175,10 @@ static int ClockDriver(char *arg) {
 	    }
 
         /* compute the current time and wake up any processes whose time has come */
-        curtime = sys_clock();
-        waking_proc = sleepingprocs.head;
+        curtime = sys_clock();                  // get current system time
+        waking_proc = sleepingprocs.head;       // get pointer to head of sleeping list
         while (waking_proc != NULL) {
-            /* wake up processes */
+            /* wake up processes accordingly */
             if (waking_proc->wake_time <= curtime) {
                 waking_proc = list_pop_node(&sleepingprocs);    // get first ready proc
                 semv_real(waking_proc->sleep_sem);              // wake up by inc semaphore
@@ -211,8 +195,8 @@ static int ClockDriver(char *arg) {
 static int DiskDriver(char *arg) {
 
     int i, track_count, result, status, unit, slot, current_track;
-    device_request my_request;
-    proc_ptr current_req;
+    device_request my_request; // current device request
+    proc_ptr current_req;      // current requester process
 
     unit = atoi(arg);
 
@@ -232,10 +216,13 @@ static int DiskDriver(char *arg) {
         halt(1);
     }
 
-    waitdevice(DISK_DEV, unit, &status);
+    result = waitdevice(DISK_DEV, unit, &status);
 
-    // errorcheck on waitdevice
+    if (result != 0) {
+        return 0;
+    }
 
+    /* set number of tracks */
     num_tracks[unit] = track_count;
 
     if (DEBUG4 && debugflag4)
@@ -246,6 +233,7 @@ static int DiskDriver(char *arg) {
 
     while(!is_zapped()) {
 
+        /* block on sem while waiting for request */
         semp_real(disk_sems[unit]);
 
         if (disk_requests[unit].count > 0) {
@@ -272,13 +260,17 @@ static int DiskDriver(char *arg) {
                         halt(1);
                     }
 
-                    waitdevice(DISK_DEV, unit, &status);
+                    result = waitdevice(DISK_DEV, unit, &status);
+
+                    if (result != 0) {
+                        return 0;
+                    }
                 }
 
                 /* read or write to sector */
-                my_request.opr  = current_req->request.operation;
-                my_request.reg1 = current_req->request.sector_start + i;
-                my_request.reg2 = current_req->request.disk_buffer + 
+                my_request.opr  = current_req->request.operation;           // set operation type
+                my_request.reg1 = current_req->request.sector_start + i;    // set sector start
+                my_request.reg2 = current_req->request.disk_buffer +        // set buffer
                 current_req->request.sectors_read * DISK_SECTOR_SIZE;
 
                 result = device_output(DISK_DEV, unit, &my_request);
@@ -289,19 +281,25 @@ static int DiskDriver(char *arg) {
                     halt(1);
                 }
 
-                waitdevice(DISK_DEV, unit, &status);
+                result = waitdevice(DISK_DEV, unit, &status);
 
-                /* track sectors read */
+                if (result != 0) {
+                    return 0;
+                }
+
+                /* keep track of sectors read with loop counter*/
                 i++;
                 current_req->request.sectors_read++;
 
+                /* if we reach end of track sector */
                 if (current_req->request.sector_start >= 15) {
-                    current_track = ++current_req->request.track_start;
-                    current_req->request.sector_start = 0;
-                    i = 0;
+                    current_track = ++current_req->request.track_start; // inc track start
+                    current_req->request.sector_start = 0;              // reset sector start
+                    i = 0;                                              // reset loop counter
                 }
             }
 
+            /* wake up requester process */
             semv_real(current_req->disk_sem);
         }
     }
@@ -329,9 +327,10 @@ static void sleep_sys(sysargs *args_ptr) {
     slot = next_proc_slot % MAXPROC;
     callingproc = &proc_tbl[slot];
 
-    callingproc->pid = getpid() % MAXPROC;
+    /* set up process */
+    callingproc->pid = getpid();
     callingproc->status = STATUS_USED;
-    callingproc->wake_time = (sleeptime * 1000000) + sys_clock();
+    callingproc->wake_time = (sleeptime * 1000000) + sys_clock(); // add sleeptime to current time
 
     /* add process to sleepinglist */
     list_add_snode(&sleepingprocs, callingproc);
@@ -403,12 +402,12 @@ static void disk_read(sysargs *args_ptr) {
 
     /* set up process */
     callingproc->pid = getpid();
-    callingproc->status = STATUS_USED;
-    callingproc->request.operation = (int)DISK_READ;
-    callingproc->request.disk_buffer  = args_ptr->arg1;
-    callingproc->request.num_sectors  = (int)args_ptr->arg2;
-    callingproc->request.track_start  = (int)args_ptr->arg3;
-    callingproc->request.sector_start = (int)args_ptr->arg4;
+    callingproc->status = STATUS_USED;                          // set status
+    callingproc->request.operation = (int)DISK_READ;            // operation type
+    callingproc->request.disk_buffer  = args_ptr->arg1;         // pointer to buffer
+    callingproc->request.num_sectors  = (int)args_ptr->arg2;    // number of sectors to read
+    callingproc->request.track_start  = (int)args_ptr->arg3;    // track start point
+    callingproc->request.sector_start = (int)args_ptr->arg4;    // sector start point
 
     /* add to disk request queue */
     list_add_node(&disk_requests[unit], callingproc);
@@ -464,12 +463,12 @@ static void disk_write(sysargs *args_ptr) {
 
     /* set up process */
     callingproc->pid = getpid();
-    callingproc->status = STATUS_USED;
-    callingproc->request.operation = (int)DISK_WRITE;
-    callingproc->request.disk_buffer  = args_ptr->arg1;
-    callingproc->request.num_sectors  = (int)args_ptr->arg2;
-    callingproc->request.track_start  = (int)args_ptr->arg3;
-    callingproc->request.sector_start = (int)args_ptr->arg4;
+    callingproc->status = STATUS_USED;                          // set status
+    callingproc->request.operation = (int)DISK_WRITE;           // operation type
+    callingproc->request.disk_buffer  = args_ptr->arg1;         // pointer to buffer
+    callingproc->request.num_sectors  = (int)args_ptr->arg2;    // number of sectors to write
+    callingproc->request.track_start  = (int)args_ptr->arg3;    // track start point
+    callingproc->request.sector_start = (int)args_ptr->arg4;    // sector start point
 
     /* add to disk request queue */
     list_add_node(&disk_requests[unit], callingproc);
@@ -579,6 +578,7 @@ void *list_pop_node(List *list) {
 
 void clear_entry(int target) {
 
+    /* reset all parameters */
     for (int i = 0; i < MAXPROC; i++) {
         if (proc_tbl[i].pid == target) {
             proc_tbl[i].pid = -1;
